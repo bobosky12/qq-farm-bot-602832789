@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.33.15 | #217 | 2026-11-22 | 同步上游 liyang master（ca9d038 → 最新，4 处打包兼容修复） | — |
 | v3.33.13 | #216 | 2026-11-21 | 牧场首页头像与农场首页统一为正圆同尺寸 | — |
 | v3.33.12 | #215 | 2026-11-21 | 修复牧场好友列表为空：friendpb.proto 缺字段 | — |
 | v3.33.11 | #213 | 2026-11-21 | 牧场好友读取失败兜底与可读错误、入口按钮组下移 | — |
@@ -218,6 +219,14 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-22 · v3.33.15（#217） · 同步上游 liyang master（ca9d038 → 最新，4 处打包兼容修复）
+
+- `core/src/config/runtime-paths.ts` 整文件覆盖：`getResourceRoot` 去掉 `!isPackaged` 分支，编译/打包后一律从 `core/src` 读 proto、gameConfig、WASM（本地非打包运行结果等价）。
+- `worker.ts` 的 `getRanchState` RPC 参数补 `args[2] ?? undefined`——打包版 fork 用 JSON IPC 会把缺省好友 GID 编成 `null`。
+- `tsdk-runtime.ts` 宿主特征值校验改为 `(referenceValue + 1) & 0xFF`（字节回绕）。
+- `core/package.json` 的 `pkg` 配置补 `"scripts": ["dist/**/*.js"]`；本地增强（版本号 3.33.x、lint:fix/test:smoke/test:live 脚本）保留。
+- **未同步**：上游 `tsdk-runtime.ts` 的 WASM 版本号与 SHA（上游 QQ v3.9.0.1794737607 / wx v3.9.0.1794837963；本地 wasm 文件是 v3.9.0.1794737041，SHA 不符会直接校验失败），只取逻辑改动。
 
 ### 2026-11-21 · v3.33.13（#216） · 牧场首页头像与农场首页统一为正圆同尺寸
 

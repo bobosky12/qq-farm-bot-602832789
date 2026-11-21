@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 33,
-  "patch": 13,
-  "build": 216,
-  "version": "3.33.13",
-  "updatedAt": "2026-11-21T06:49:29.751Z",
+  "patch": 15,
+  "build": 217,
+  "version": "3.33.15",
+  "updatedAt": "2026-11-21T18:38:16.290Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.33.15",
+      "build": 217,
+      "date": "2026-11-22",
+      "summary": "同步上游 liyang master（ca9d038 → 最新，4 处打包兼容修复）",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.33.13",
       "build": 216,

@@ -1,6 +1,6 @@
 {
   "name": "qq-farm-bot",
-  "version": "3.33.13",
+  "version": "3.33.15",
   "description": "",
   "license": "ISC",
   "author": "",
@@ -45,6 +45,9 @@
     "typescript": "~5.9.3"
   },
   "pkg": {
+    "scripts": [
+      "dist/**/*.js"
+    ],
     "assets": [
       "../web/dist/**/*",
       "dist/gameConfig/**/*",
