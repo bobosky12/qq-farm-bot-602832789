@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 33,
-  "patch": 15,
-  "build": 217,
-  "version": "3.33.15",
-  "updatedAt": "2026-11-21T18:38:16.290Z",
+  "patch": 16,
+  "build": 218,
+  "version": "3.33.16",
+  "updatedAt": "2026-11-21T18:53:48.841Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.33.16",
+      "build": 218,
+      "date": "2026-11-22",
+      "summary": "游戏客户端版本跟进到 1.17.0.6_20261117",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.33.15",
       "build": 217,
