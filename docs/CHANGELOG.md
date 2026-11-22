@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.33.18 | #220 | 2026-11-22 | 补齐历史遗漏：TSDK 签名库、集市即时唤醒、只催熟模式 | — |
 | v3.33.17 | #219 | 2026-11-22 | 同步上游 liyang master（f4d68c2 → c45cd3f，牧场生涯与罐头时机） | — |
 | v3.33.16 | #218 | 2026-11-22 | 游戏客户端版本跟进到 1.17.0.6_20261117 | — |
 | v3.33.15 | #217 | 2026-11-22 | 同步上游 liyang master（ca9d038 → 最新，4 处打包兼容修复） | — |
@@ -221,6 +222,17 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-22 · v3.33.18（#220） · 补齐历史遗漏：TSDK 签名库、集市即时唤醒、只催熟模式
+
+全仓对比上游（c45cd3f）后发现三处「因本地改动而未同步」的实际缺口，一并补上：
+
+- **TSDK 签名库落后上游**（影响登录）：`core/src/utils/tsdk-wx.wasm` 与 `tsdk.wasm` 从回退 v3.29.1 起一直没跟上——微信仍是 `v3.9.0.1794737041`（上游 `v3.9.0.1794837963`），QQ 是同版本号但不同构建（SHA 不同）。服务端会校验签名库版本，这是「Code 或版本不符 / 关闭码 400」与 QQ 长时间运行后掉线的高度可疑原因。现两个 WASM 与 `TSDK_SHA256` / wx version+sha 常量全部对齐上游（改前备份到 `_wasm-backup-*`）。
+- **「只催熟」化肥模式保存失效**：`shared-state.ts` 与 `account-config.ts` 两处白名单都只有 `both/normal/organic/smart/none`，漏了类型与运行时早已支持的 `normal_ripen` / `organic_ripen`，前端选「只催熟」保存后会被静默重置为默认值。现统一为 `FERTILIZER_MODES` + `normalizeFertilizerMode` 并导出复用。
+- **集市即时唤醒未接线**：`ranch/automation.ts` 已有 `requestMarketCheck()` / `noteMarketVisit()`，但 network.ts 不发事件、worker.ts 也不监听。现补 `ranchMarketStockReady`（集市货币 7002/1008 到账）与 `ranchMarketVisitChanged`（`RotationShopNotify` 轮换）两个事件及 worker 监听——只提前跑「已到期」的牧场例程，不绕过 `nextCheckAt`，不会因集市通知频繁切场景。
+- 顺带把 `web/src/stores/setting.ts` 的罐头时机字段补成显式类型（`RanchFeedStage`）。
+
+**说明**：上游另有 11 个文件本地没有（`services/randomdrop.ts`、`rate-limiter.ts`、`security.ts`，以及 `MobileBottomNav.vue`、`SpaceTransition.vue` 等 web 组件），已确认它们未被任何代码引用（上游历史遗留），无功能影响，未补。
 
 ### 2026-11-22 · v3.33.17（#219） · 同步上游 liyang master（f4d68c2 → c45cd3f，牧场生涯与罐头时机）
 

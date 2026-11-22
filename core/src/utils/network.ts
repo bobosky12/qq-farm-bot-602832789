@@ -833,6 +833,13 @@ function handleNotify(msg: any): void {
         }
 
         // 牧场设施变更（21 级棚待激活等）：只处理自己的设施通知。
+        // 牧场集市轮换（上游集市即时唤醒）：开门 / 关门 / 换批时通知牧场例程。
+        if (type === 'gamepb.shoppb.RotationShopNotify') {
+            const rotation = types.RanchRotationShopNotify.decode(eventBody).shops.find((shop: any) => toNum(shop.shop_id) === 7);
+            if (rotation) networkEvents.emit('ranchMarketVisitChanged', rotation);
+            return;
+        }
+
         if (type === 'gamepb.homesteadpb.FacilitiesNotify') {
             const notify = types.RanchFacilitiesNotify.decode(eventBody);
             const hostGid = toNum(notify.host_gid);
@@ -869,6 +876,9 @@ function handleNotify(msg: any): void {
                         } else if (delta !== 0) {
                             userState.coupon = Math.max(0, Number(userState.coupon || 0) + delta);
                         }
+                    } else if ((id === 7002 || id === 1008) && delta > 0) {
+                        // 集市货币到账后唤醒牧场例程，按最新余额和报价兑换（上游集市即时唤醒）。
+                        networkEvents.emit('ranchMarketStockReady', { id, count, delta });
                     } else if (id === 1005) {
                         if (count > 0) {
                             userState.goldBean = count;

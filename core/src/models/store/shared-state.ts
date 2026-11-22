@@ -1,4 +1,4 @@
-import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, CapitalModeConfig, FertilizerLandType, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
+import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, CapitalModeConfig, FertilizerLandType, FertilizerMode, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
 export {};
 
 const { DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersion } = require('../../config/config');
@@ -253,6 +253,14 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
 };
 
 const ALLOWED_AUTOMATION_KEYS: Set<string> = new Set(Object.keys(DEFAULT_ACCOUNT_CONFIG.automation));
+
+// 化肥模式白名单：必须包含「只催熟」两种（normal_ripen / organic_ripen），
+// 否则前端保存这两个模式时会被静默重置回默认值，功能等于不可用。
+const FERTILIZER_MODES = new Set<FertilizerMode>(['both', 'normal', 'organic', 'smart', 'none', 'normal_ripen', 'organic_ripen']);
+
+function normalizeFertilizerMode(value: unknown, fallback: FertilizerMode): FertilizerMode {
+    return FERTILIZER_MODES.has(value as FertilizerMode) ? value as FertilizerMode : fallback;
+}
 
 // 活动自动化里不是布尔的字段：数值、好友优先列表、奶茶策略对象。
 // 归一化时必须保留原类型，否则会被 !!v 压成 true/false。
@@ -526,8 +534,7 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(src.automation))) {
             if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
             if (k === 'fertilizer') {
-                const allowed = ['both', 'normal', 'organic', 'smart', 'none'];
-                (cfg.automation as any)[k] = allowed.includes(v as string) ? v : cfg.automation[k as keyof AutomationConfig];
+                (cfg.automation as any)[k] = normalizeFertilizerMode(v, cfg.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 cfg.automation.fertilizer_land_types = normalizeFertilizerLandTypes(v, cfg.automation.fertilizer_land_types);
             } else if (k.startsWith('ranch_')) {
@@ -869,6 +876,7 @@ module.exports = {
     normalizeBagSeedLandTypes,
     normalizeBagSeedFallbackStrategy,
     normalizeFertilizerLandTypes,
+    normalizeFertilizerMode,
     normalizeTimeString,
     normalizeIntervals,
     normalizeAutoAcceptFriendMinLevel,

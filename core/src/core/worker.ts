@@ -17,7 +17,7 @@ const { performDailyMonthCardGift, getMonthCardDailyState } = require('../servic
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { runExclusiveAutomationTask } = require('../services/automation-lock');
 const ranchAutomation = require('../services/ranch/automation');
-const { isRanchMarketEnabled } = require('../config/ranch-automation');
+const { isRanchMarketEnabled, RANCH_MARKET_SWITCH_BY_CURRENCY } = require('../config/ranch-automation');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
 const { refreshActivityWindows } = require('../services/activity-windows');
@@ -193,6 +193,22 @@ function onRanchBookReward(kind: 'normal' | 'giant', available: boolean): void {
 function onRanchFacilitiesChanged(facilities: any[]): void {
     if (!loginReady || !getAutomation().ranch_activate_shed) return;
     if (ranchAutomation.noteRanchFacilities(facilities)) scheduleUnifiedNextTick();
+}
+
+// 集市即时唤醒（上游 PR）：货币到账 / 集市轮换时提前跑一次牧场例程。
+// 本地牧场靠 60 秒轮询驱动，这里不绕过 nextCheckAt —— 已到期就立即跑，
+// 未到期直接返回，不会因为集市通知频繁切场景（避免加重请求压力）。
+function wakeRanchMarketExchange({ id }: { id: 7002 | 1008 }): void {
+    if (!loginReady) return;
+    const auto = getAutomation();
+    if ((auto[RANCH_MARKET_SWITCH_BY_CURRENCY[id]] ?? auto.ranch_market_organic) !== true) return;
+    ranchAutomation.requestMarketCheck();
+    void runRanchRoutine(true).catch(() => null);
+}
+
+function onRanchMarketVisitChanged(rotation: any): void {
+    if (!loginReady || !isRanchMarketEnabled(getAutomation())) return;
+    if (ranchAutomation.noteMarketVisit(rotation)) void runRanchRoutine(true).catch(() => null);
 }
 
 function runRanchRoutine(detached = false): Promise<void> {
@@ -1075,6 +1091,10 @@ async function startBot(config: any): Promise<void> {
     networkEvents.on('ranchBookReward', onRanchBookReward);
     networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
     networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+    networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
+    networkEvents.on('ranchMarketStockReady', wakeRanchMarketExchange);
+    networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+    networkEvents.on('ranchMarketVisitChanged', onRanchMarketVisitChanged);
 
     const generation = runtimeGeneration;
     const canContinueLogin = (): boolean => isRunning && !shutdownStarted && generation === runtimeGeneration;
@@ -1237,6 +1257,8 @@ function detachRuntimeListeners(): void {
     networkEvents.off('kickout', onKickout);
     networkEvents.off('ranchBookReward', onRanchBookReward);
     networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+    networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
+    networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
     if (onDisconnected) {
         networkEvents.off('disconnected', onDisconnected);
         onDisconnected = null;

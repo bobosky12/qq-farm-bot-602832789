@@ -164,8 +164,8 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(cfg.automation))) {
             if ((next.automation as any)[k] === undefined) continue;
             if (k === 'fertilizer') {
-                const allowed = ['both', 'normal', 'organic', 'smart', 'none'];
-                (next.automation as any)[k] = allowed.includes(v as string) ? v : (next.automation as any)[k];
+                // 白名单必须包含「只催熟」两种模式，否则保存时会被静默重置。
+                (next.automation as any)[k] = sharedState.normalizeFertilizerMode(v, next.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 (next.automation as any)[k] = normalizeFertilizerLandTypes(v, next.automation.fertilizer_land_types);
             } else if (k.startsWith('ranch_')) {

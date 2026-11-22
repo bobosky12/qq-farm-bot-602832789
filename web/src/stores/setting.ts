@@ -20,6 +20,8 @@ export interface MilkTeaHirePolicy {
   ticketReserve: string
 }
 
+type RanchFeedStage = 'any' | 'longest' | 'to_production' | 'near_harvest'
+
 export interface AutomationConfig {
   /** 牧场等后续新增的开关按 key 直接读写，字段随后端配置扩展。 */
   [key: string]: any
@@ -37,6 +39,9 @@ export interface AutomationConfig {
   fertilizer_2x2_ripen?: boolean
   fertilizer_land_types?: string[]
   fertilizer_smart_seconds?: number
+  /** 罐头使用时机（上游 PR #177）：普通与有机可分别设置。 */
+  ranch_feed_normal_stage?: RanchFeedStage
+  ranch_feed_organic_stage?: RanchFeedStage
   illustrated_auto_claim_rewards?: boolean
   illustrated_auto_buy_missing_seeds?: boolean
   illustrated_buy_skip_bag?: boolean
