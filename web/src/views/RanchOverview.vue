@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import api from '@/api'
 import { BUCKETS, formatCount, formatHours, sortFacilities, useRanchLoader, useRanchUnmountReset } from '@/components/ranch/ranch-shared'
+import RanchCareerPanel from '@/components/ranch/RanchCareerPanel.vue'
 import RanchGate from '@/components/ranch/RanchGate.vue'
 import RunLogCard from '@/components/RunLogCard.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -18,7 +19,8 @@ const accountStore = useAccountStore()
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, currentAccountConnected: isOnline } = storeToRefs(useStatusStore())
 const { state, loading } = storeToRefs(useRanchStore())
-const { refresh } = useRanchLoader('animals')
+// 概览走 overview 视图（上游 PR #175）：后端在该视图额外带回牧场生涯统计。
+const { refresh } = useRanchLoader('overview')
 useRanchUnmountReset()
 
 const facilities = computed<any[]>(() => sortFacilities(state.value?.facilities || []))
@@ -157,6 +159,7 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
   <div class="page-stack flex flex-col gap-5">
     <EmptyState v-if="!currentAccountId" title="请先选择账号" description="在左侧选择账号后查看牧场" icon="i-carbon-user-avatar" />
     <RanchGate v-else @retry="refresh">
+      <div class="overview-band">
       <div class="overview-grid">
         <!-- 账号：身份、在线状态与牧场等级 -->
         <section class="ov-card ov-account">
@@ -230,6 +233,10 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
             </div>
           </div>
         </section>
+      </div>
+
+      <!-- 牧场生涯（上游 PR #175）：收获 / 成熟 / 偷取与产物一览 -->
+      <RanchCareerPanel v-if="state.career" :key="currentAccountId" :career="state.career" />
       </div>
 
       <div v-if="blocked" class="ranch-alert" role="status">
@@ -319,6 +326,12 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
 <style scoped src="@/styles/overview.css"></style>
 
 <style scoped>
+.overview-band {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
 /* 与农场首页一致：入口按钮与圆形刷新钮一起顶对齐并下移 6px，避免与头像文案错位。 */
 .ov-account__head > :deep(.n-button) {
   align-self: flex-start;

@@ -7,6 +7,8 @@ const { animalMap, mutationMap, cubMap, canMap, facilityMap, itemMap, taskMap, i
 const { getServerTimeSec } = require('../../utils/utils');
 const { logWarn } = require('../../utils/utils');
 const { types } = require('../../utils/proto');
+const { getUserState } = require('../../utils/network');
+const { getCareerInfoOrNull } = require('../career');
 
 function bagItems(bag: any): any[] {
     return [...bag.physical_items, ...bag.virtual_items];
@@ -112,8 +114,14 @@ function snapshot(raw: any): any {
         currencies: [1007, 1002, 1005, 1008, 7002].map(id => ({ ...itemDto({ id, count: balance(raw.bag, id).total }), locked: balance(raw.bag, id).locked })),
         buckets: [7003, 7004].map(id => ({ id, seconds: balance(raw.bag, id).total })),
         grass: balance(raw.bag, 7001).total,
+        hourglassSeconds: balance(raw.bag, 1006).total,
         facilities: raw.cells.facilities.filter((facility: any) => [6, 7, 8].includes(facility.module_type)).map((facility: any) => facilityDto(facility, info.level)),
     };
+}
+
+function canLockRanchItem(item: any): boolean {
+    const type = itemMap.get(Number(item.id))?.type;
+    return BigInt(quantity(item.uid)) > 0n && (item.is_locked || type === 106 || type === 107);
 }
 
 function inventory(raw: any): any[] {
@@ -121,7 +129,7 @@ function inventory(raw: any): any[] {
         const metadata = itemMap.get(Number(item.id));
         const animal = cubMap.get(Number(item.id));
         return {
-            ...itemDto(item), uid: quantity(item.uid), locked: item.is_locked, tabId: Number(item.tab_id) || Number(metadata?.show_tab_ids) || 0,
+            ...itemDto(item), uid: quantity(item.uid), locked: item.is_locked, lockable: canLockRanchItem(item), tabId: Number(item.tab_id) || Number(metadata?.show_tab_ids) || 0,
             type: metadata?.type || 0, sellPrices: item.show?.sells?.map(itemDto) || [],
             canSell: salePrices(item).length > 0,
             can: canMap.get(Number(item.id)) || null, animalId: animal?.id || null, giantCub: !!animal?.giantCubItemId,
@@ -198,13 +206,14 @@ async function market(raw: any): Promise<any> {
     };
 }
 
-async function canCatalog(raw: any, slotType = 6): Promise<any> {
-    if (![6, 7].includes(slotType)) throw error('INVALID_ARGUMENT', '未知牧场罐头商城');
+async function ranchMallCatalog(raw: any, slotType = 6, cansOnly = false): Promise<any> {
+    if (![6, 7].includes(slotType)) throw error('INVALID_ARGUMENT', '未知牧场商城');
     const reply = await rpc('canShop', { slot_type: slotType, is_manual_open: true, global_scene_id: 2 });
     const now = getServerTimeSec();
     const goods: any[] = [];
     for (const good of reply.goods_list) {
-        if (!good.reward_items.length || good.reward_items.some((item: any) => !canMap.has(Number(item.id)))) continue;
+        if (!good.reward_items.length || good.reward_items.some((item: any) =>
+            !canMap.has(Number(item.id)) && (cansOnly || Number(item.id) !== 1006))) continue;
         const promotion = Number(good.discount_price) > 0 && Number(good.promotion_start_time) <= now && now < Number(good.promotion_end_time);
         const price = itemDto({ id: good.price.id, count: promotion ? good.discount_price : good.price.count });
         const free = good.is_free && BigInt(price.count) === 0n;
@@ -218,6 +227,22 @@ async function canCatalog(raw: any, slotType = 6): Promise<any> {
                 && (free || price.id > 0 && BigInt(price.count) > 0n) });
     }
     return { slotType, goods };
+}
+
+function canCatalog(raw: any, slotType = 6): Promise<any> {
+    return ranchMallCatalog(raw, slotType, true);
+}
+
+/** 牧场生涯统计（上游 PR #175）：概览页展示收获/成熟/偷取与产物排行。 */
+async function ranchCareer(gid: number): Promise<any> {
+    const career = (await getCareerInfoOrNull(gid))?.ranch;
+    if (!career) return null;
+    return {
+        ...career,
+        products: career.products.filter((item: any) => item.count > 0).map((item: any) => ({
+            ...itemDto(item), type: itemMap.get(item.id)?.type,
+        })),
+    };
 }
 
 /**
@@ -273,7 +298,7 @@ function analyticsPayload(): any {
 }
 
 async function getState(view = 'animals', shopId?: number, hostGid?: string): Promise<any> {
-    if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'analytics'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面');
+    if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'analytics', 'overview', 'mall'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面');
     if (view === 'analytics') return analyticsPayload();
     if (!isUnlocked()) return { unlocked: false, sceneId: 2, reason: '牧场尚未解锁，请先在游戏中完成开启条件' };
     return inScene(async (cells: any) => {
@@ -285,10 +310,12 @@ async function getState(view = 'animals', shopId?: number, hostGid?: string): Pr
         state.operations = todayStats.actions;
         state.operationsDate = todayStats.date;
         state.nextChecks = require('./daily').getRoutineChecks();
+        if (view === 'overview') state.career = await ranchCareer(getUserState().gid);
         if (view === 'bag') state.bag = inventory(raw);
         if (view === 'shop') state.shop = await catalog(raw, Number(shopId ?? 5));
         if (view === 'market') state.market = await market(raw);
         if (view === 'cans') state.canShop = await canCatalog(raw, Number(shopId ?? 6));
+        if (view === 'mall') state.mall = await ranchMallCatalog(raw, Number(shopId ?? 6));
         if (view === 'tasks') {
             state.tasks = taskList(await rpc('tasks', { global_scene_id: 2 }));
             // 每日首次分享状态随任务和活动页面返回。
@@ -309,7 +336,7 @@ async function getState(view = 'animals', shopId?: number, hostGid?: string): Pr
                 // 导致列表上的 blacklisted 全为 false。
                 const blacklist = new Set(require('../../models/store').getRanchFriendBlacklist(process.env.FARM_ACCOUNT_ID || undefined));
                 try {
-                    state.friends = (await getRanchFriendList()).map(({ gid, name, avatarUrl }) => ({ gid: String(gid), name, avatarUrl, blacklisted: blacklist.has(gid) }));
+                    state.friends = (await getRanchFriendList(undefined, true)).map(friend => ({ ...friend, gid: String(friend.gid), blacklisted: blacklist.has(friend.gid) }));
                 }
                 catch (cause: any) {
                     // 微信平台拉好友是一次 GetAll 大请求，超时或被农场巡检抢走场景都很常见。
@@ -337,4 +364,4 @@ async function resourceBalances(keys: string[]): Promise<any[]> {
     });
 }
 
-module.exports = { getState, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, resourceBalance, isRanchResource, resourceBalances, animalDto };
+module.exports = { getState, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };

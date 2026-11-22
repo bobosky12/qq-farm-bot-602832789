@@ -98,7 +98,11 @@ test('哈希后可校验通过，错密码与串改哈希都不通过', () => {
     const stored = auth.hashPassword('Zx9#kLm2');
     assert.equal(auth.verifyPassword('Zx9#kLm2', stored), true);
     assert.equal(auth.verifyPassword('Zx9#kLm3', stored), false);
-    assert.equal(auth.verifyPassword('Zx9#kLm2', `${stored.slice(0, -1)}0`), false);
+    // 改末位必须真的改成不同字符：原来固定拼 '0'，末位本来就是 '0' 时篡改无效，
+    // scrypt 哈希十六进制末位约 1/16 概率为 0，测试会随机假红。
+    const tampered = `${stored.slice(0, -1)}${stored.endsWith('0') ? '1' : '0'}`;
+    assert.notEqual(tampered, stored, '篡改后的哈希必须与原值不同');
+    assert.equal(auth.verifyPassword('Zx9#kLm2', tampered), false);
 });
 
 test('兼容老的 sha256 格式（无盐），并标记为需要重新哈希', () => {

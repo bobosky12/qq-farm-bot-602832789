@@ -5,12 +5,21 @@ const { types } = require('../utils/proto');
 const { toLong, toNum, logWarn } = require('../utils/utils');
 const { getItemById, getItemImageById, getPlantByFruitId } = require('../config/gameConfig');
 
+export interface RanchCareerInfo {
+    harvest: number;
+    mature: number;
+    steal: number;
+    products: { id: number; count: number }[];
+}
+
 export interface CareerInfo {
     gid: number;
     harvest: number;
     steal: number;
     level: number;
     name: string;
+    /** 牧场生涯统计（上游 PR #175）：服务端未下发时为 null。 */
+    ranch: RanchCareerInfo | null;
 }
 
 export interface CareerHarvestItem {
@@ -88,12 +97,19 @@ async function getCareerProfile(gid: number): Promise<CareerProfile> {
 /** 偷菜过滤 / 土地详情用：只取简版收偷数量，行为保持不变。 */
 async function getCareerInfo(gid: number): Promise<CareerInfo> {
     const reply = await requestCareerReply(gid);
+    const ranch = reply.ranch;
     return {
         gid: toNum(reply.gid) || toNum(gid),
         harvest: toNum(reply.total_harvest_count ?? reply.totalHarvestCount),
         steal: toNum(reply.total_steal_count ?? reply.totalStealCount),
         level: toNum(reply.level),
         name: String(reply.name || ''),
+        ranch: ranch ? {
+            harvest: toNum(ranch.total_harvest_count),
+            mature: toNum(ranch.total_mature_count),
+            steal: toNum(ranch.total_steal_count),
+            products: (ranch.harvest_items || []).map((item: any) => ({ id: toNum(item.item_id), count: toNum(item.harvest_count) })),
+        } : null,
     };
 }
 

@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.33.17 | #219 | 2026-11-22 | 同步上游 liyang master（f4d68c2 → c45cd3f，牧场生涯与罐头时机） | — |
 | v3.33.16 | #218 | 2026-11-22 | 游戏客户端版本跟进到 1.17.0.6_20261117 | — |
 | v3.33.15 | #217 | 2026-11-22 | 同步上游 liyang master（ca9d038 → 最新，4 处打包兼容修复） | — |
 | v3.33.13 | #216 | 2026-11-21 | 牧场首页头像与农场首页统一为正圆同尺寸 | — |
@@ -220,6 +221,19 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-22 · v3.33.17（#219） · 同步上游 liyang master（f4d68c2 → c45cd3f，牧场生涯与罐头时机）
+
+上游 6 个提交 / 2 个 PR（#175 牧场生涯与设施、#177 罐头使用时机）：
+
+- **牧场生涯统计**（#175）：`careerpb.proto` 新增 `RanchCareerInfo`（收获/成熟/偷取/产物）与 `CareerInfoGetReply.ranch = 16`；`career.ts` 的 `getCareerInfo` 带回 `ranch` 字段；`ranch/state.ts` 新增 `overview` 视图（附 `career`）与新增组件 `RanchCareerPanel.vue`，概览页顶部展示「牧场生涯」；好友牧场详情也展示对方生涯卡片。
+- **罐头使用时机**（#177）：普通/有机罐头可分别设置 `ranch_feed_normal_stage` / `ranch_feed_organic_stage`，新增 `any | longest | to_production | near_harvest` 四种时机（`near_harvest` = 成熟期且距收获 10 分钟内）；`actions.ts` 抽出 `matchesFeedStage`，自动化与手动喂养共用同一判断。
+- **牧场商城与物品锁定**：`state.ts` 拆出 `ranchMallCatalog`（支持沙漏 1006 奖励）并新增 `mall` 视图；`canLockRanchItem` + `bag.lockable` 配合新动作 `setItemLock`（批量上锁/解锁）、`buyMall`（商城购买）、`speedUpUpgrade`（沙漏加速升级，含计时与消耗二次校验）。
+- **设施与好友**：`RanchFacilitiesPanel` 支持沙漏加速；好友列表改用 `getRanchFriendList(undefined, true)` 取最新数据并在打开详情时回填可清理/可偷状态。
+
+**保留的本地改动**：牧场自动化默认全关（仅 ranch_task / ranch_share 开，`ranch_feed_organic_stage` 默认 `near_harvest` 但开关仍关）；概览页库存四项（罐头时长 + 图鉴点数）与「我的牧场／刷新」按钮组、下次检查倒计时、本地今日统计明细；`actions.ts` 的 `operate` 包装（动作名计数）与上游 `recordOperation(action, completed, 'ranch')` 并行，互不重叠；好友读取失败兜底（`friendsError`）与黑名单按账号读取。
+
+**顺带修复**：`auth-security.test.js` 篡改哈希用例原来固定把末位改成 `0`，末位本就是 `0` 时篡改无效（约 1/16 概率假红），改为按当前末位取反。
 
 ### 2026-11-22 · v3.33.16（#218） · 游戏客户端版本跟进到 1.17.0.6_20261117
 

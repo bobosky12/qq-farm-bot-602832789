@@ -1036,6 +1036,8 @@ export const RANCH_AUTOMATION_DEFAULTS = {
   ranch_feed_normal: false,
   ranch_feed_normal_stage: 'longest',
   ranch_feed_organic: false,
+  // 有机罐头默认只在「距收获 10 分钟内」使用，避免把长周期罐头浪费在成熟期刚起步的动物上。
+  ranch_feed_organic_stage: 'near_harvest',
   ranch_clean: false,
   ranch_stroke: false,
   ranch_friend_steal: false,

@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 33,
-  "patch": 16,
-  "build": 218,
-  "version": "3.33.16",
-  "updatedAt": "2026-11-21T18:53:48.841Z",
+  "patch": 17,
+  "build": 219,
+  "version": "3.33.17",
+  "updatedAt": "2026-11-22T14:26:18.645Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.33.17",
+      "build": 219,
+      "date": "2026-11-22",
+      "summary": "同步上游 liyang master（f4d68c2 → c45cd3f，牧场生涯与罐头时机）",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.33.16",
       "build": 218,

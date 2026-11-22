@@ -103,6 +103,18 @@ const operations: OperationsMap = {
 
 let currentDateKey: string | null = null;
 
+// 牧场动作计数（上游 PR #175）：与农场分开存，避免同名 key（harvest/steal）互相污染。
+const ranchOperations: Record<string, number> = {
+    harvest: 0,
+    produce: 0,
+    helpFarming: 0,
+    steal: 0,
+};
+
+function restoreOperationCounts(target: Record<string, number>, saved: Record<string, number> = {}): void {
+    for (const key of Object.keys(target)) target[key] = Number(saved?.[key]) || 0;
+}
+
 interface LastState {
     gold: number;
     exp: number;
@@ -173,10 +185,11 @@ let currentAccountId: string | null = null;
 let sessionStartedAt = Date.now();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-function recordOperation(type: string, count: number = 1): void {
+function recordOperation(type: string, count: number = 1, scene: 'farm' | 'ranch' = 'farm'): void {
     checkAndResetDailyStats();
-    if (operations[type] !== undefined) {
-        operations[type] += count;
+    const target = scene === 'ranch' ? ranchOperations : operations;
+    if (target[type] !== undefined) {
+        target[type] += count;
         scheduleSave();
     }
 }
@@ -196,6 +209,9 @@ function checkAndResetDailyStats(): void {
         console.warn(`[统计] 检测到跨天，重置每日统计 (${currentDateKey} -> ${todayKey})`);
         Object.keys(operations).forEach((key: string) => {
             operations[key] = 0;
+        });
+        Object.keys(ranchOperations).forEach((key: string) => {
+            ranchOperations[key] = 0;
         });
         // 跨天后基线清空：下次 getStats/recomputeSessionTotals 以当时值重新起算，
         // 金币/经验/点券/金豆当日增量都从新的一天重新累计。
@@ -232,6 +248,7 @@ function doSave(): void {
     const data: any = {
         date: dateKey,
         operations: { ...operations },
+        ranchOperations: { ...ranchOperations },
         initialState: { ...initialState },
         savedAt: Date.now(),
     };
@@ -293,11 +310,13 @@ function initStatsWithPersistence(accountId: string, gold: number | null, exp: n
                 operations[key] = Number(saved.operations[key]) || 0;
             }
         });
+        restoreOperationCounts(ranchOperations, saved.ranchOperations);
         console.warn(`[统计] 已恢复今日统计数据: ${JSON.stringify(saved.operations)}`);
     } else {
         Object.keys(operations).forEach((key: string) => {
             operations[key] = 0;
         });
+        restoreOperationCounts(ranchOperations);
         if (saved) {
             console.warn(`[统计] 日期已变更，重置统计 (${saved.date} -> ${todayKey})`);
         }
@@ -432,6 +451,7 @@ function getStats(statusData: any, userState: any, connected: boolean, limits: a
         uptime: process.uptime(),
         sessionElapsedSeconds: Math.max(0, (Date.now() - sessionStartedAt) / 1000),
         operations: operationsSnapshot,
+        ranchOperations: { ...ranchOperations },
         sessionExpGained: session.expGained,
         sessionGoldGained: session.goldGained,
         sessionCouponGained: session.couponGained,
