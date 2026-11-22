@@ -40,22 +40,43 @@ const currentLabel = computed(() => {
   return ('navLabel' in item && item.navLabel) || item.label
 })
 /** 手机底部导航同样跟着场景换：牧场只出牧场入口，不把农场页面混进来。 */
-const mobileItems = computed(() => (sceneStore.scene === 'ranch'
-  ? ranchMenu.filter(item => item.mobileLabel).map(item => ({
-      key: item.name,
-      to: item.path,
-      label: item.mobileLabel || item.label,
-      icon: item.icon,
-      active: isRanchMenuActive(item, route.path),
-    }))
-  : visibleMenuRoutes().filter(item => item.mobileLabel).map(item => ({
-      key: item.name,
-      to: menuLink(item),
-      label: item.mobileLabel || item.label,
-      icon: item.icon,
-      active: isMenuActive(item, route.path),
-    }))))
+const mobileItems = computed(() => { if (sceneStore.scene === 'ranch') {
+  return ranchMenu.filter(item => item.mobileLabel).map(item => ({
+    key: item.name,
+    to: item.path,
+    label: item.mobileLabel || item.label,
+    icon: item.icon,
+    active: isRanchMenuActive(item, route.path),
+  }))
+}
+// 农场底部导航按手机端习惯排序：总览 / 农场 / 发现 / 好友 / 我的。
+const MOBILE_ORDER = ['dashboard', 'personal', 'activity-center', 'friends', 'Settings']
+return visibleMenuRoutes()
+  .filter(item => item.mobileLabel)
+  .sort((a, b) => MOBILE_ORDER.indexOf(a.name) - MOBILE_ORDER.indexOf(b.name))
+  .map(item => ({
+    key: item.name,
+    to: menuLink(item),
+    label: item.mobileLabel || item.label,
+    icon: item.icon,
+    active: isMenuActive(item, route.path),
+  }))
+})
 const moreActive = computed(() => !mobileItems.value.some(item => item.active))
+void moreActive
+
+// 手机顶部：农场/牧场分段切换（与侧栏同一份 sceneStore，切场景即换整套页面）。
+const SCENE_OPTIONS: Array<{ key: 'farm' | 'ranch', label: string, icon: string }> = [
+  { key: 'farm', label: '农场', icon: 'i-carbon-sprout' },
+  { key: 'ranch', label: '牧场', icon: 'i-carbon-wheat' },
+]
+
+function switchScene(key: 'farm' | 'ranch') {
+  if (sceneStore.scene === key)
+    return
+  sceneStore.select(key)
+  router.push(key === 'ranch' ? '/ranch' : '/')
+}
 // 路由是场景的真值来源：直接点菜单进「牧场」也要把开关切过去，
 // 否则会出现「页面已经在牧场、侧栏还写着农场」的矛盾状态。
 // 设置页两个场景共用，停在设置页时保持进来时的场景，不强行切回农场。
@@ -101,20 +122,42 @@ async function logout() {
     <Sidebar />
     <div class="farm-workspace" :inert="sidebarOpen && !desktop">
       <header class="farm-topbar">
-        <div class="min-w-0 flex items-center gap-2">
-          <button type="button" aria-label="打开导航" :aria-expanded="sidebarOpen" aria-controls="farm-sidebar" class="farm-icon-button lg:hidden" @click="appStore.openSidebar">
+        <!-- 手机端：农场/牧场分段 + 账号胶囊（复刻 App 顶栏） -->
+        <div class="farm-topbar-mobile lg:hidden">
+          <button type="button" aria-label="打开导航" :aria-expanded="sidebarOpen" aria-controls="farm-sidebar" class="farm-icon-button farm-topbar-mobile__menu" @click="appStore.openSidebar">
             <span class="i-carbon-menu" aria-hidden="true" />
           </button>
-          <div class="farm-breadcrumb">
-            <span class="hidden sm:inline">{{ currentGroup }}</span><span class="hidden opacity-40 sm:inline" aria-hidden="true">/</span>
-            <strong>{{ currentLabel }}</strong>
+          <div class="mob-scene-switch" role="group" aria-label="农牧场切换">
+            <button
+              v-for="option in SCENE_OPTIONS"
+              :key="option.key"
+              type="button"
+              class="mob-scene-option"
+              :class="{ 'is-active': sceneStore.scene === option.key }"
+              :aria-pressed="sceneStore.scene === option.key"
+              @click="switchScene(option.key)"
+            >
+              <span :class="option.icon" aria-hidden="true" />
+              <span>{{ option.label }}</span>
+            </button>
+          </div>
+          <div class="mob-account">
+            <TopAccountMenu />
           </div>
         </div>
-        <div class="farm-topbar-actions">
-          <TopAccountMenu />
-          <button class="farm-icon-button" type="button" title="退出验证" aria-label="退出验证" :disabled="loggingOut" @click="logout">
-            <span :class="loggingOut ? 'i-svg-spinners-ring-resize' : 'i-carbon-logout'" aria-hidden="true" />
-          </button>
+
+        <!-- 桌面端：面包屑 + 账号菜单 + 退出验证 -->
+        <div class="farm-topbar-desktop hidden w-full items-center justify-between gap-3 lg:flex">
+          <div class="farm-breadcrumb">
+            <span>{{ currentGroup }}</span><span class="opacity-40" aria-hidden="true">/</span>
+            <strong>{{ currentLabel }}</strong>
+          </div>
+          <div class="farm-topbar-actions">
+            <TopAccountMenu />
+            <button class="farm-icon-button" type="button" title="退出验证" aria-label="退出验证" :disabled="loggingOut" @click="logout">
+              <span :class="loggingOut ? 'i-svg-spinners-ring-resize' : 'i-carbon-logout'" aria-hidden="true" />
+            </button>
+          </div>
         </div>
       </header>
       <main id="farm-page-content" class="farm-page-content" :class="{ 'is-activity-detail': activityDetail }" tabindex="-1">
@@ -126,9 +169,6 @@ async function logout() {
         <RouterLink v-for="item in mobileItems" :key="item.key" :to="item.to" :class="{ 'is-active': item.active }" :aria-current="item.active ? 'page' : undefined">
           <span :class="item.icon" aria-hidden="true" /><span>{{ item.label }}</span>
         </RouterLink>
-        <button type="button" :class="{ 'is-active': moreActive }" :aria-expanded="sidebarOpen" aria-controls="farm-sidebar" @click="appStore.openSidebar">
-          <span class="i-carbon-overflow-menu-horizontal" aria-hidden="true" /><span>更多</span>
-        </button>
       </nav>
     </div>
   </div>
@@ -257,44 +297,110 @@ async function logout() {
 }
 @media (max-width: 1023px) {
   .farm-topbar {
-    min-height: 66px;
-    padding: 8px 16px;
+    min-height: 60px;
+    padding: 8px 10px;
     gap: 4px;
   }
-  .farm-page-content {
-    padding: 18px 18px 24px;
+  /* 手机顶栏：菜单 + 农场/牧场分段 + 账号胶囊（复刻 App） */
+  .farm-topbar-mobile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
   }
+  .farm-topbar-mobile__menu {
+    flex: none;
+  }
+  .mob-scene-switch {
+    display: inline-flex;
+    flex: none;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--ui-ink) 7%, transparent);
+  }
+  .mob-scene-option {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 13px;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    color: var(--ui-muted);
+    font-size: 13px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  .mob-scene-option > span:first-child {
+    font-size: 16px;
+  }
+  .mob-scene-option.is-active {
+    background: var(--theme-primary);
+    color: #fff;
+    box-shadow: 0 2px 6px color-mix(in srgb, var(--theme-primary) 35%, transparent);
+  }
+  .mob-account {
+    min-width: 0;
+    margin-left: auto;
+  }
+  /* 账号胶囊：只要头像 + 名字，副标题隐藏（更贴近 App 顶栏） */
+  .mob-account :deep(.top-account-trigger) {
+    gap: 6px;
+    padding: 4px 10px 4px 4px;
+    border-radius: 999px;
+    background: var(--ui-surface);
+    box-shadow: 0 1px 2px rgb(16 24 20 / 6%);
+  }
+  .mob-account :deep(.top-account-trigger > span:first-child) {
+    width: 28px;
+    height: 28px;
+  }
+  .mob-account :deep(.top-account-subtitle) {
+    display: none;
+  }
+  .mob-account :deep(.top-account-trigger .text-sm) {
+    font-size: 13px;
+  }
+  .farm-page-content {
+    padding: 12px 12px 18px;
+  }
+  /* 底部导航：浮起圆角条，当前项浅绿胶囊（复刻 App） */
   .farm-mobile-nav {
     display: flex;
     flex-shrink: 0;
     justify-content: space-around;
-    gap: 4px;
-    padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
-    border-top: 1px solid var(--surface-border);
-    background: var(--farm-sidebar);
+    gap: 2px;
+    margin: 0 10px calc(10px + env(safe-area-inset-bottom));
+    padding: 7px 6px;
+    border-top: none;
+    border-radius: 22px;
+    background: var(--ui-surface);
+    box-shadow: 0 8px 24px rgb(16 24 20 / 12%);
   }
-  .farm-mobile-nav a,
-  .farm-mobile-nav button {
+  .farm-mobile-nav a {
     display: flex;
     flex: 1;
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 5px;
+    gap: 4px;
     min-width: 0;
-    min-height: 48px;
-    padding: 4px;
-    border-radius: 8px;
-    font-size: 12px;
-    color: var(--muted-text);
+    min-height: 46px;
+    padding: 4px 2px;
+    border-radius: 16px;
+    font-size: 11px;
+    color: var(--ui-subtle);
+    text-decoration: none;
+    transition: background 0.2s ease, color 0.2s ease;
   }
-  .farm-mobile-nav a > span:first-child,
-  .farm-mobile-nav button > span:first-child {
-    font-size: 21px;
+  .farm-mobile-nav a > span:first-child {
+    font-size: 22px;
   }
   .farm-mobile-nav .is-active {
     color: var(--theme-primary);
-    background: color-mix(in srgb, var(--theme-primary) 9%, var(--surface-1));
+    background: color-mix(in srgb, var(--theme-primary) 13%, transparent);
     font-weight: 650;
   }
 }

@@ -4,7 +4,7 @@ import type { ActivityDirectoryItemDto, ActivityGameplayKey } from '@/stores/act
 import { useNotification } from 'naive-ui/es/notification'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { resolveActivityGameplay } from '@/components/activity/gameplays'
 import ShareRewardActivity from '@/components/activity/ShareRewardActivity.vue'
 import { ACCOUNT_SWITCH_WINDOW_MS, isAccountSwitching } from '@/composables/useAccountSwitchScroll'
@@ -31,6 +31,7 @@ type CenterActivity = ActivityGameplayKey | 'solar'
 const props = withDefaults(defineProps<{ space?: 'farm' | 'ranch' }>(), { space: 'farm' })
 
 const router = useRouter()
+const route = useRoute()
 const notification = useNotification()
 const accountStore = useAccountStore()
 const activityStore = useActivityCenterStore()
@@ -144,6 +145,8 @@ watch(stellarDetailsAvailable, (available) => {
 onMounted(() => {
   activityStore.refresh(accountId())
   // 与 liyang 版一致：进活动中心先看活动目录，不自动跳进奶茶热销中。
+  // 例外：手机端快捷入口带 ?activity=solar 时直开节令日历（内置常驻功能，无服务器活动可跳）。
+  if (String(route.query.activity || '') === 'solar') selectedActivity.value = 'solar'
 })
 onUnmounted(() => {
   window.clearTimeout(stellarAvailabilityTimer)
