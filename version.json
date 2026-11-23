@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 6,
-  "build": 236,
-  "version": "3.35.6",
-  "updatedAt": "2026-11-23T17:37:23.944Z",
+  "patch": 7,
+  "build": 237,
+  "version": "3.35.7",
+  "updatedAt": "2026-11-23T17:59:04.459Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.7",
+      "build": 237,
+      "date": "2026-11-24",
+      "summary": "同步上游：好友牧场互动与好友列表展示",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.6",
       "build": 236,
