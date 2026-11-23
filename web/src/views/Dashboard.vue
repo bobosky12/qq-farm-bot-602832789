@@ -7,7 +7,6 @@ import { computed, nextTick, onMounted, reactive, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import AccountCareerModal from '@/components/AccountCareerModal.vue'
 import LevelForecast from '@/components/LevelForecast.vue'
-import MobileFarmOverview from '@/components/mobile/MobileFarmOverview.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -801,10 +800,7 @@ useIntervalFn(updateCountdowns, 1000)
 </script>
 
 <template>
-  <!-- 手机端：卡片式总览（复刻 App 界面）；桌面端不渲染，避免重复占位。 -->
-  <MobileFarmOverview class="md:hidden" />
-
-  <div class="page-stack hidden flex-col gap-5 md:flex">
+  <div class="page-stack flex flex-col gap-5">
     <!-- Overview -->
     <div class="overview-grid">
       <!-- 账号：身份、在线状态与等级进度 -->
