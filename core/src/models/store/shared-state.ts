@@ -798,7 +798,10 @@ function loadGlobalConfig(): void {
                 const deviceOs = String(srcDevice.os || data.systemConfig.os || 'Windows').trim();
                 const savedTopVersion = String(data.systemConfig.clientVersion || '').trim();
                 const savedDeviceVersion = String(srcDevice.clientVersion || '').trim();
-                const savedVersion = savedDeviceVersion || savedTopVersion;
+                // 顶层 clientVersion 是权威值：deviceInfo.clientVersion 只是派生缓存。
+                // 反过来（device 优先）会让「只改了顶层」的配置被旧 device 值静默覆盖，
+                // 表现为改完版本重启又变回去。
+                const savedVersion = savedTopVersion || savedDeviceVersion;
                 const savedVersionUpdatedAt = Number(data.systemConfig.clientVersionUpdatedAt);
                 const {
                     clientVersion: deviceClientVersion,
