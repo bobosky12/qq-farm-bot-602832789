@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 3,
-  "build": 233,
-  "version": "3.35.3",
-  "updatedAt": "2026-11-23T14:06:47.425Z",
+  "patch": 5,
+  "build": 235,
+  "version": "3.35.5",
+  "updatedAt": "2026-11-23T15:38:31.487Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.5",
+      "build": 235,
+      "date": "2026-11-23",
+      "summary": "采集器接轨与强制添加协议修正",
+      "commit": "—",
+      "type": "minor"
+    },
     {
       "version": "3.35.3",
       "build": 233,

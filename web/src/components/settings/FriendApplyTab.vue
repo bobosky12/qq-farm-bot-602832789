@@ -20,6 +20,15 @@ const shareText = ref('')
 const selected = ref<Set<string>>(new Set())
 const filter = ref('all')
 const result = ref('')
+/** apply = 进入农场拿令牌发申请（需对方同意）；force = 点卡片直加（服务端直接绑定） */
+const mode = ref<'apply' | 'force'>('force')
+const showCollector = ref(false)
+const panelOrigin = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3007'
+
+const modeHints: Record<string, string> = {
+  force: '只上报分享点击，服务端直接绑定好友，无需对方同意；必须带 openid，且 openid 要与 share_key 的主人一致。',
+  apply: '进入对方农场拿申请令牌再发申请，需要「点击分享链接可拜访好友」开关，对方要点同意。',
+}
 
 const statusLabels: Record<string, string> = {
   all: '全部', new: '未申请', pending: '待通过', expired: '已过期', dead: '不可加', friend: '已好友',
@@ -60,7 +69,7 @@ async function importCodes() {
     if (data?.ok) {
       result.value = data.data.parsed > 0
         ? `已导入 ${data.data.added} 条、更新 ${data.data.updated} 条（识别 ${data.data.parsed} 条分享卡片）`
-        : '未识别到有效卡片：必须带 uid 与 openid。可粘贴采集器 JSON 或形如 ?uid=...&openid=...&share_key=... 的链接，每行一条。'
+        : '未识别到有效卡片：每行至少要有 uid，并且带 openid 或 share_key。可粘贴采集器 JSON 或形如 ?uid=...&openid=...&share_key=... 的链接。'
       if (data.data.parsed > 0) shareText.value = ''
       await loadPool()
     }
@@ -87,10 +96,14 @@ async function applySelected() {
       items: targets.map((item: any) => ({
         uid: item.uid, openid: item.openid, shareKey: item.shareKey, shareSource: item.shareSource,
       })),
+      options: { mode: mode.value },
     }, headers())
     if (data?.ok) {
       const r = data.data || {}
-      result.value = `申请完成：成功 ${r.applied || 0} / 跳过 ${r.skipped || 0} / 失败 ${r.failed || 0}${r.aborted ? `；已中断：${r.aborted}` : ''}`
+      const head = mode.value === 'force'
+        ? `强制添加完成：已直加 ${r.friend || 0} / 跳过 ${r.skipped || 0} / 失败 ${r.failed || 0}`
+        : `申请完成：成功 ${r.applied || 0} / 跳过 ${r.skipped || 0} / 失败 ${r.failed || 0}`
+      result.value = `${head}${r.aborted ? `；已中断：${r.aborted}` : ''}`
       selected.value = new Set()
       await loadPool()
     }
@@ -117,9 +130,31 @@ onMounted(loadPool)
     </div>
 
     <section class="farm-card rounded-lg p-4 space-y-3">
+      <div class="flex flex-wrap items-center gap-2">
+        <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">添加方式</h4>
+        <div class="flex overflow-hidden rounded-lg border border-gray-200 text-xs dark:border-gray-700">
+          <button
+            type="button"
+            class="px-3 py-1 transition"
+            :class="mode === 'force' ? 'bg-[var(--theme-primary)] text-white' : 'bg-white text-gray-600 dark:bg-gray-900 dark:text-gray-300'"
+            @click="mode = 'force'"
+          >强制添加</button>
+          <button
+            type="button"
+            class="px-3 py-1 transition"
+            :class="mode === 'apply' ? 'bg-[var(--theme-primary)] text-white' : 'bg-white text-gray-600 dark:bg-gray-900 dark:text-gray-300'"
+            @click="mode = 'apply'"
+          >申请添加</button>
+        </div>
+      </div>
+      <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">{{ modeHints[mode] }}</p>
+    </section>
+
+    <section class="farm-card rounded-lg p-4 space-y-3">
       <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">导入分享卡片</h4>
-      <p class="text-xs text-gray-500 dark:text-gray-400">
-        支持采集器导出的 JSON（<code>{"data":[{"uid","openid","shareKey"}]}</code>）或每行一条 <code>?uid=...&openid=...&share_key=...</code> 链接；<b>uid 与 openid 必填</b>，带 share_key 才能走「进入农场 → 拿申请令牌 → 发好友申请」完整链路。
+      <p class="text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+        支持采集器推送/导出的 JSON（<code>{"users":[{"gid","shareKey","openid","shareCfgId"}]}</code>）或每行一条 <code>?uid=...&openid=...&share_key=...</code> 链接。
+        <b>每行至少要有 uid，并带 openid 或 share_key</b>；强制添加模式必须带 openid（且要与该 share_key 的主人一致）。
       </p>
       <textarea
         v-model="shareText"
@@ -130,6 +165,24 @@ onMounted(loadPool)
       <div class="flex items-center gap-2">
         <BaseButton variant="primary" size="sm" :loading="importing" :disabled="!shareText.trim()" @click="importCodes">导入号池</BaseButton>
         <span v-if="result" class="text-xs text-gray-500 dark:text-gray-400">{{ result }}</span>
+      </div>
+    </section>
+
+    <section class="farm-card rounded-lg p-4 space-y-3">
+      <button type="button" class="flex w-full items-center gap-2 text-left" @click="showCollector = !showCollector">
+        <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">接采集器（自动灌号池）</h4>
+        <span class="i-carbon-chevron-down text-xs text-gray-400 transition" :class="showCollector ? 'rotate-180' : ''" />
+        <span class="ml-auto text-xs text-gray-400">点开看配置</span>
+      </button>
+      <div v-if="showCollector" class="space-y-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400">
+        <p>采集器里设 <code>PANEL_URL</code> 指向本面板，导入接口已按采集器的路径与字段做好兼容，脚本本身一行都不用改：</p>
+        <pre class="overflow-x-auto rounded-lg bg-gray-50 p-3 text-[11px] dark:bg-gray-900">PANEL_URL={{ panelOrigin }}
+PANEL_USER=admin
+PANEL_PASS=你的面板密码
+ACCOUNT_ID=1
+AUTO_IMPORT=1</pre>
+        <p>采集器调的是 <code>POST /api/auto-friend/pool/import</code>（body <code>{"users":[...]}</code>），本面板已实现该路径，返回 <code>added / updated / skipped</code> 与采集器期望一致。</p>
+        <p>两种运行方式：<code>python collect.py</code>（需 WeChatFerry + PC 微信 3.9.12.51）或 <code>python server.py</code>（HTTP 接收，配合 pywxrobot4 推送插件，默认监听 127.0.0.1:9898）。</p>
       </div>
     </section>
 
@@ -146,7 +199,7 @@ onMounted(loadPool)
           {{ label }}<template v-if="pool.counts?.[key]"> {{ pool.counts[key] }}</template>
         </button>
         <BaseButton class="ml-auto" variant="secondary" size="sm" :disabled="!selectedItems.length || applying" :loading="applying" @click="applySelected">
-          批量申请（已选 {{ selectedItems.length }}）
+          {{ mode === 'force' ? '批量强制添加' : '批量申请' }}（已选 {{ selectedItems.length }}）
         </BaseButton>
       </div>
 
@@ -162,7 +215,8 @@ onMounted(loadPool)
           <div class="min-w-0 flex-1">
             <div class="truncate text-sm text-gray-800 dark:text-gray-100">{{ item.name || `GID ${item.uid}` }}</div>
             <div class="truncate text-xs text-gray-500 dark:text-gray-400">
-              Lv.{{ item.level || '?' }} · GID {{ item.uid }} · 已申请 {{ item.applyCount || 0 }} 次
+              Lv.{{ item.level || '?' }} · {{ item.dogBreed || '犬种未知' }} · GID {{ item.uid }} · 已申请 {{ item.applyCount || 0 }} 次
+              <template v-if="!item.openid"> · 缺 openid</template>
             </div>
           </div>
           <span class="shrink-0 rounded px-2 py-0.5 text-xs" :class="statusColors[item.status] || statusColors.new">

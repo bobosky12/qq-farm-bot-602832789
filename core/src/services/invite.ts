@@ -1,14 +1,14 @@
 export {};
 /**
- * 邀请码处理模块 - 读取 share.txt 并通过 ReportArkClick 申请好友
+ * 邀请码 / 好友号池处理模块
  * 注意：此功能仅在微信环境下有效
  *
- * 原理：
- * 1. 首次登录时，游戏会在 LoginRequest 中携带 sharer_id 和 sharer_open_id
- * 2. 已登录状态下点击分享链接，游戏会发送 ReportArkClickRequest
- * 3. 服务器收到后会自动向分享者发送好友申请
- *
- * 我们使用 ReportArkClickRequest 来模拟已登录状态下的分享链接点击
+ * 两条链路（都已实测）：
+ * 1. 申请添加：VisitService.Enter(reason=5, share_key) 拿 apply_token → FriendService.ApplyFriend，
+ *    需要「点击分享链接可拜访好友」开关（字段 6 = 1），对方要点同意。
+ * 2. 强制添加：只发 UserService.ReportArkClick(sharer_id, sharer_open_id, scene_id,
+ *    share_cfg_id, share_key)，服务端几秒内直接绑定好友，无需对方同意。
+ *    要求 openid 与 share_key 的主人一致；openid 缺失时服务端不会绑定。
  */
 
 const { CONFIG } = require('../config/config');
@@ -17,6 +17,24 @@ const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, log, logWarn, sleep } = require('../utils/utils');
 const { readTextFile, writeTextFileAtomic } = require('./json-db');
+
+/** 微信分享卡片场景号（卡片默认 1007，登录分享链接是 1256） */
+const ARK_SCENE_ID = '1007';
+
+/** dog_id → 犬种，用于号池资料识别（反编译 dogpb 常量） */
+const DOG_BREEDS: Record<number, string> = {
+    0: '无狗',
+    90001: '田园犬',
+    90002: '牧羊犬',
+    90003: '斑点狗',
+    90011: '柯基',
+    90021: '护主犬',
+};
+
+function dogBreedName(dogId: unknown): string {
+    const id = Number(dogId) || 0;
+    return DOG_BREEDS[id] || (id > 0 ? `未知(${id})` : '无狗');
+}
 
 interface ParsedShareLink {
     uid: string | null;
@@ -87,19 +105,59 @@ function readShareFile(): ParsedShareLink[] {
 }
 
 /**
- * 发送 ReportArkClick 请求
- * 模拟已登录状态下点击分享链接，触发服务器向分享者发送好友申请
+ * 发送 ReportArkClick 请求（= 已登录状态下点开对方分享卡片）。
+ *
+ * 字段号以反编译源码为准：sharer_id=1 / sharer_open_id=2 / scene_id=3 /
+ * share_cfg_id=4 / share_key=5。旧版把 3、4 写反且没带 share_key，
+ * 服务端只会当成一次无效点击；带上正确的 share_key 后，服务端会直接
+ * 把对方加进好友列表（免同意直加），回包 relation.is_friend 可验证结果。
+ *
+ * 关键约束：sharer_open_id 必须与 share_key 的主人一致，否则服务端不绑定。
  */
-async function sendReportArkClick(sharerId: string | null, sharerOpenId: string | null, shareSource: string | null): Promise<any> {
+async function sendReportArkClick(
+    sharerId: string | null,
+    sharerOpenId: string | null,
+    shareSource: string | null,
+    shareKey: string | null = null,
+    sceneId: string = ARK_SCENE_ID,
+): Promise<any> {
     const body: Uint8Array = types.ReportArkClickRequest.encode(types.ReportArkClickRequest.create({
         sharer_id: toLong(sharerId),
-        sharer_open_id: sharerOpenId,
+        sharer_open_id: String(sharerOpenId || ''),
+        scene_id: String(sceneId || ARK_SCENE_ID),
         share_cfg_id: toLong(shareSource || 0),
-        scene_id: '1256',  // 模拟微信场景
+        share_key: String(shareKey || ''),
     })).finish();
 
     const { body: replyBody } = await sendMsgAsync('gamepb.userpb.UserService', 'ReportArkClick', body);
-    return types.ReportArkClickReply.decode(replyBody);
+    try {
+        return types.ReportArkClickReply.decode(replyBody || Buffer.alloc(0));
+    } catch {
+        return {};
+    }
+}
+
+/**
+ * 强制添加（免同意直加）：只发 ReportArkClick，不发申请、不需要 Enter。
+ * 依据：反编译的热启动流程，玩家点开分享卡片时游戏只发这一个请求，
+ * 服务端随即完成绑定；本项目旧链路缺 share_key 所以一直没生效。
+ */
+async function forceAddSharer(item: any): Promise<any> {
+    const uid = String(item?.uid || '');
+    const shareKey = String(item?.shareKey || '');
+    const openid = String(item?.openid || '');
+    if (!uid) return { uid, ok: false, skipped: true, error: '缺少 uid' };
+    if (!shareKey) return { uid, ok: false, skipped: true, error: '缺少 share_key，无法强制添加' };
+    if (!openid) return { uid, ok: false, skipped: true, error: '缺少 openid，无法强制添加（请用原始分享链接导入）' };
+
+    const reply: any = await sendReportArkClick(uid, openid, item.shareSource, shareKey);
+    const isFriend = !!(reply?.relation && reply.relation.is_friend);
+    return {
+        uid, ok: true, isFriend,
+        name: String(item?.name || ''),
+        level: Number(item?.level) || 0,
+        mode: 'force',
+    };
 }
 
 // 请求间隔时间（毫秒）
@@ -219,8 +277,11 @@ async function ensureVisitSwitch(): Promise<boolean | null> {
     return opened;
 }
 
-/** 进入对方农场（只读），拿昵称/等级与好友申请令牌，随后立刻离开。 */
-async function enterSharer(uid: string, shareKey: string): Promise<{ level: number; name: string; gid: string; applyToken: string }> {
+/** 进入对方农场（只读），拿昵称/等级/犬种与好友申请令牌，随后立刻离开。 */
+async function enterSharer(uid: string, shareKey: string): Promise<{
+    level: number; name: string; gid: string; applyToken: string;
+    isFriend: boolean; isTourist: boolean; dogBreed: string;
+}> {
     const request = types.VisitEnterRequest.encode(types.VisitEnterRequest.create({
         host_gid: toLong(uid),
         reason: ENTER_REASON_FROM_SHARE,
@@ -234,6 +295,9 @@ async function enterSharer(uid: string, shareKey: string): Promise<{ level: numb
         name: String(basic.name || ''),
         gid: String(basic.gid || uid),
         applyToken: String(reply?.apply_token || ''),
+        isFriend: !!(reply?.host_relation && reply.host_relation.is_friend),
+        isTourist: !!reply?.is_tourist,
+        dogBreed: dogBreedName(reply?.brief_dog_info?.dog_id),
     };
     try {
         const leave = types.VisitLeaveRequest.encode(types.VisitLeaveRequest.create({ host_gid: toLong(uid) })).finish();
@@ -253,25 +317,26 @@ async function sendApplyFriend(uid: string, applyToken: string): Promise<void> {
 /** 对单张分享卡片执行完整加好友流程。 */
 async function sendFriendRequestToSharer(item: any, opts: { minLevel?: number; allowUnknownLevel?: boolean } = {}): Promise<any> {
     const uid = String(item?.uid || '');
-    const openid = String(item?.openid || '');
     const shareKey = String(item?.shareKey || '');
     if (!uid) return { uid, ok: false, skipped: true, error: '缺少 uid' };
     if (!shareKey) return { uid, ok: false, skipped: true, error: '缺少 share_key，无法获取申请令牌' };
 
     const info = await enterSharer(uid, shareKey);
+    // Enter 顺手把昵称/等级/犬种回填进号池，省一次单独识别。
+    try {
+        require('./friend/pool').updateProfile(uid, { name: info.name, level: info.level, dogBreed: info.dogBreed });
+    } catch {}
+
+    if (info.isFriend)
+        return { uid, ok: false, skipped: true, friend: true, level: info.level, name: info.name, error: '已是好友' };
     const minLevel = Number(opts.minLevel) > 0 ? Math.floor(Number(opts.minLevel)) : 0;
     if (minLevel > 0 && opts.allowUnknownLevel !== true && info.level > 0 && info.level < minLevel)
         return { uid, ok: false, skipped: true, level: info.level, name: info.name, error: `农场等级 ${info.level} < ${minLevel}` };
     if (!info.applyToken)
         return { uid, ok: false, skipped: true, level: info.level, name: info.name, error: '未拿到申请令牌（对方可能关闭了拜访权限）' };
 
-    // 点击上报：失败不影响申请本身。
-    try {
-        await sendReportArkClick(uid, openid, item.shareSource);
-    } catch {}
-
     await sendApplyFriend(uid, info.applyToken);
-    return { uid, ok: true, level: info.level, name: info.name };
+    return { uid, ok: true, level: info.level, name: info.name, dogBreed: info.dogBreed };
 }
 
 /** 把用户粘贴的分享链接/文本导入号池（全账号共享）。 */
@@ -294,26 +359,35 @@ function importShareText(text: string): { added: number; updated: number; parsed
 }
 
 /**
- * 批量申请：按号池逐条 Enter → ApplyFriend，状态/每日上限按账号隔离。
- * 撞上限立即停整批；已是好友 / 待通过的直接跳过。
+ * 批量加好友，两种模式：
+ * - apply（默认）：号池逐条 Enter → ApplyFriend，需对方同意；撞每日上限立即停整批。
+ * - force：号池逐条 ReportArkClick，服务端直接绑定，无需同意；必须带 openid。
+ * 已是好友 / 待通过 / 已判定死链的直接跳过，状态按账号隔离。
  */
 async function applyInviteList(items: any[], opts: any = {}): Promise<any> {
     const pool = require('./friend/pool');
     const accountId = String(opts.accountId || currentAccountId());
+    const mode = String(opts.mode || 'apply').toLowerCase() === 'force' ? 'force' : 'apply';
     const limitMs = Math.max(0, Number(opts.delayMs ?? INVITE_REQUEST_DELAY));
     const maxCount = Math.max(0, Number(opts.limit) || 0);
-    const result = { total: 0, applied: 0, skipped: 0, failed: 0, aborted: '', errors: [] as any[] };
+    const result = {
+        mode, total: 0, applied: 0, skipped: 0, failed: 0, friend: 0,
+        aborted: '', errors: [] as any[],
+    };
 
     if (pool.dailyLimitBlocked(accountId)) {
         result.aborted = '今日好友申请已达上限，明天再试';
         log('邀请', result.aborted);
         return result;
     }
-    const switchOk = await ensureVisitSwitch();
-    if (switchOk === false) {
-        result.aborted = VISIT_SWITCH_HINT;
-        logWarn('邀请', result.aborted);
-        return result;
+    // 强制模式不发 Enter，不需要「点击分享链接可拜访好友」开关。
+    if (mode === 'apply') {
+        const switchOk = await ensureVisitSwitch();
+        if (switchOk === false) {
+            result.aborted = VISIT_SWITCH_HINT;
+            logWarn('邀请', result.aborted);
+            return result;
+        }
     }
 
     const statusMap = pool.getStatusMap(accountId);
@@ -321,20 +395,36 @@ async function applyInviteList(items: any[], opts: any = {}): Promise<any> {
     const targets = (Array.isArray(items) ? items : []).filter((item: any) => {
         const uid = String(item?.uid || '');
         const status = statusMap[uid] || 'new';
-        return !!item?.shareKey && uid && status !== 'friend' && status !== 'pending' && !friendGids.has(uid);
+        if (!item?.shareKey || !uid) return false;
+        if (status === 'friend' || status === 'pending' || friendGids.has(uid)) return false;
+        if (mode === 'force' && !String(item?.openid || '').trim()) return false;
+        return true;
     });
     result.total = maxCount > 0 ? Math.min(targets.length, maxCount) : targets.length;
+    if (result.total > 0) log('邀请', `开始${mode === 'force' ? '强制' : '申请'}添加好友：${result.total} 个候选`);
 
     for (let i = 0; i < result.total; i += 1) {
         const item = targets[i];
         try {
-            const outcome = await sendFriendRequestToSharer(item, opts);
+            const outcome = mode === 'force'
+                ? await forceAddSharer(item)
+                : await sendFriendRequestToSharer(item, opts);
             if (outcome.skipped) {
                 result.skipped += 1;
+                if (outcome.friend) pool.markFriend(accountId, String(item.uid));
+                else if (outcome.error) pool.markDead(accountId, String(item.uid), String(outcome.error));
             } else if (outcome.ok) {
-                pool.markApplied(accountId, String(item.uid));
-                result.applied += 1;
-                log('邀请', `[${i + 1}/${result.total}] 已向 uid=${item.uid} 发送好友申请`);
+                if (mode === 'force') {
+                    // 直加成功：服务端已绑定，直接记为好友。
+                    pool.markFriend(accountId, String(item.uid));
+                    pool.markArkApplied(accountId, String(item.uid), !!outcome.isFriend);
+                    result.friend += 1;
+                    log('邀请', `[${i + 1}/${result.total}] 已强制添加 uid=${item.uid}${outcome.name ? `（${outcome.name}）` : ''} isFriend=${outcome.isFriend}`);
+                } else {
+                    pool.markApplied(accountId, String(item.uid));
+                    result.applied += 1;
+                    log('邀请', `[${i + 1}/${result.total}] 已向 uid=${item.uid} 发送好友申请`);
+                }
             }
         } catch (e: any) {
             const message = String(e?.message || e || '');
@@ -352,11 +442,11 @@ async function applyInviteList(items: any[], opts: any = {}): Promise<any> {
             result.failed += 1;
             result.errors.push({ uid: item.uid, error: message });
             pool.markDead(accountId, String(item.uid), message);
-            logWarn('邀请', `[${i + 1}/${result.total}] uid=${item.uid} 申请失败: ${message}`);
+            logWarn('邀请', `[${i + 1}/${result.total}] uid=${item.uid} ${mode === 'force' ? '强制添加' : '申请'}失败: ${message}`);
         }
         if (i < result.total - 1 && limitMs > 0) await sleep(limitMs);
     }
-    log('邀请', `批量申请完成：${result.applied} 成功 / ${result.skipped} 跳过 / ${result.failed} 失败${result.aborted ? `，中断：${result.aborted}` : ''}`);
+    log('邀请', `批量加好友完成（${mode === 'force' ? '强制' : '申请'}）：${mode === 'force' ? `${result.friend} 已直加` : `${result.applied} 已申请`} / ${result.skipped} 跳过 / ${result.failed} 失败${result.aborted ? `，中断：${result.aborted}` : ''}`);
     return result;
 }
 
@@ -370,10 +460,12 @@ module.exports = {
     sendReportArkClick,
     processInviteCodes,
     clearShareFile,
-    // 主动加好友（BUGDey v2.18.12）
+    // 主动加好友（BUGDey v2.18.12 + 强制直加链路）
     importShareText,
     applyInviteList,
     getFriendPoolSnapshot,
     ensureVisitSwitch,
     sendFriendRequestToSharer,
+    forceAddSharer,
+    dogBreedName,
 };

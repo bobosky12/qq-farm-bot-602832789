@@ -18,6 +18,57 @@ const {
 } = require('./middleware');
 
 /**
+ * 把各种来源的一条记录归一成号池条目。
+ * 采集器（card-collector）给的是 {gid, shareKey, openid, shareCfgId}，
+ * 手工粘贴的 JSON 常见 {uid, share_key, share_source, ...}，两种都收。
+ *
+ * 只要求 uid 能转成正整数；openid 可缺（申请模式不需要，强制模式才需要），
+ * 但 uid/openid/shareKey 全空的行直接丢弃。
+ */
+function normalizePoolItem(item: any): any {
+    if (!item || typeof item !== 'object') return null;
+    const uid = String(item.uid ?? item.gid ?? item.sharer_id ?? '').trim();
+    if (!/^\d+$/.test(uid) || Number(uid) <= 0) return null;
+    const openid = String(item.openid ?? item.openId ?? item.sharer_open_id ?? '').trim();
+    const shareKey = String(item.shareKey ?? item.share_key ?? '').trim();
+    if (!openid && !shareKey) return null;
+    const shareSource = item.shareSource ?? item.share_source ?? item.shareCfgId ?? item.share_cfg_id ?? '';
+    const docId = item.docId ?? item.doc_id ?? '';
+    return {
+        uid, openid, shareKey,
+        shareSource: String(shareSource ?? ''),
+        docId: String(docId ?? ''),
+        cardTime: String(item.cardTime ?? item.card_time ?? item.at ?? ''),
+        name: String(item.name || ''),
+        level: Number(item.level) || 0,
+        ...(item.dogBreed ? { dogBreed: String(item.dogBreed) } : {}),
+    };
+}
+
+/** 解析一行 `?uid=..&openid=..&share_source=..&share_key=..` 或带时间前缀的采集日志行。 */
+function parsePoolLine(line: string): any {
+    const text = String(line || '').trim();
+    if (!text) return null;
+    // 逐行分享日志可能是 `2026-07-26 02:00:51 | uid=..&openid=..`，
+    // 用正则抽参数而不是 URLSearchParams——后者会把时间前缀当成第一个键名。
+    const paramRe = /(?:^|[?&\s"'<|])(uid|openid|share_source|doc_id|share_key)=([^&\s"'<|]+)/g;
+    const params: Record<string, string> = {};
+    let firstIndex = -1;
+    let match: RegExpExecArray | null;
+    while ((match = paramRe.exec(text)) !== null) {
+        if (!(match[1] in params)) params[match[1]] = match[2];
+        if (firstIndex < 0) firstIndex = match.index;
+    }
+    if (firstIndex < 0) return null;
+    const cardTime = firstIndex > 0 ? text.slice(0, firstIndex).replace(/[|?&\s]+$/, '').trim() : '';
+    return normalizePoolItem({
+        uid: params.uid, openid: params.openid,
+        shareSource: params.share_source, docId: params.doc_id,
+        shareKey: params.share_key, cardTime,
+    });
+}
+
+/**
  * 取好友列表用于「附加昵称头像」。返回 null 表示已经写过响应，调用方直接 return。
  *
  * `await x || []` 只兜住 null/undefined：provider 若返回对象（错误包 / 空响应），
@@ -508,26 +559,13 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
     app.post('/api/friends/pool/import', (req: Request, res: Response) => {
         const raw = String((req.body || {}).text || '').trim();
         const items: any[] = [];
-        const normalize = (item: any): any => {
-            if (!item || typeof item !== 'object') return null;
-            const uid = String(item.uid || item.gid || '').trim();
-            const openid = String(item.openid || item.openId || '').trim();
-            if (!uid || !openid) return null;
-            return {
-                uid, openid,
-                shareSource: String(item.shareSource ?? item.share_source ?? ''),
-                docId: String(item.docId ?? item.doc_id ?? ''),
-                shareKey: String(item.shareKey ?? item.share_key ?? '').trim(),
-                cardTime: String(item.cardTime ?? item.card_time ?? item.at ?? ''),
-            };
-        };
         // 兼容采集器导出的 JSON（{ data:[...] } 或直接数组）与逐行分享链接两种格式。
         if (raw.startsWith('{') || raw.startsWith('[')) {
             try {
                 const parsed = JSON.parse(raw);
                 const entries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : []);
                 for (const entry of entries) {
-                    const item = normalize(entry);
+                    const item = normalizePoolItem(entry);
                     if (item) items.push(item);
                 }
             } catch {
@@ -535,13 +573,7 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
             }
         } else {
             for (const line of raw.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean)) {
-                const query = line.startsWith('?') ? line.slice(1) : line;
-                const params = new URLSearchParams(query.includes('?') ? query.slice(query.indexOf('?') + 1) : query);
-                const item = normalize({
-                    uid: params.get('uid'), openid: params.get('openid'),
-                    shareSource: params.get('share_source'), docId: params.get('doc_id'),
-                    shareKey: params.get('share_key'), cardTime: params.get('card_time'),
-                });
+                const item = parsePoolLine(line);
                 if (item) items.push(item);
             }
         }
@@ -550,6 +582,51 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
                 ? require('../../services/friend/pool').upsertItems(items)
                 : { added: 0, updated: 0 };
             res.json({ ok: true, data: { ...result, parsed: items.length } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // ==================== 采集器兼容层（card-collector / pywxrobot4 推送） ====================
+    // 采集器（collect.py、server.py）打的是 /api/auto-friend/pool/import，
+    // body {users:[{gid,shareKey,openid,shareCfgId}]}，头 x-admin-token + x-account-id，
+    // 只认 data.added / data.updated / data.skipped。这里做等价映射，
+    // 采集器端只需把 PANEL_URL 指向本机，其它一概不用改。
+    app.post('/api/auto-friend/pool/import', (req: Request, res: Response) => {
+        const body = req.body || {};
+        const entries: any[] = Array.isArray(body.users)
+            ? body.users
+            : (Array.isArray(body.items) ? body.items : []);
+        const items: any[] = [];
+        let skipped = 0;
+        for (const entry of entries) {
+            const item = normalizePoolItem(entry);
+            if (item) items.push(item);
+            else skipped += 1;
+        }
+        // 采集器偶尔直接转发整段文本（没有 users 数组）时，退回文本解析。
+        if (!entries.length && typeof body.text === 'string') {
+            for (const line of String(body.text).split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean)) {
+                const item = parsePoolLine(line);
+                if (item) items.push(item);
+                else skipped += 1;
+            }
+        }
+        try {
+            const result = items.length
+                ? require('../../services/friend/pool').upsertItems(items)
+                : { added: 0, updated: 0 };
+            res.json({ ok: true, data: { ...result, skipped, parsed: items.length } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // 采集器/面板读取号池（等价于 /api/friends/pool，路径与参考实现一致）
+    app.get('/api/auto-friend/pool', (req: Request, res: Response) => {
+        const id = getAccId(ctx, req) || 'default';
+        try {
+            res.json({ ok: true, data: require('../../services/friend/pool').snapshot(id) });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -578,4 +655,5 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
 
 }
 
-module.exports = { mountFriendRoutes };
+// normalizePoolItem / parsePoolLine 一并导出，供采集器兼容层单测直接调用。
+module.exports = { mountFriendRoutes, normalizePoolItem, parsePoolLine };

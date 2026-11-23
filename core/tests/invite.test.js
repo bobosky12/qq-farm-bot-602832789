@@ -57,7 +57,7 @@ require.cache[require.resolve('../dist/utils/proto')] = {
                 create: value => value,
                 encode: value => ({ finish: () => Buffer.from(JSON.stringify(value)) }),
             },
-            ReportArkClickReply: { decode: () => ({ ok: true }) },
+            ReportArkClickReply: { decode: () => ({ relation: { is_friend: true } }) },
         },
     },
 };
@@ -216,7 +216,7 @@ test('逐条发送申请，条目之间才等待，最后一条不等', async ()
     assert.equal(sleepCalls, 2, '3 条之间只应该有 2 次间隔');
 });
 
-test('请求体带上分享者标识与微信场景号', async () => {
+test('无 share_key 的老链接上报点击：带分享者标识与卡片场景号', async () => {
     writeShare('?uid=77&openid=op-77&share_source=5');
 
     await invite.processInviteCodes();
@@ -225,9 +225,49 @@ test('请求体带上分享者标识与微信场景号', async () => {
     const body = clicks[0].body;
     // share_cfg_id 与 sharer_id 走 toLong，是 Long 实例，比较前先转成 number。
     assert.equal(Long.fromValue(body.share_cfg_id).toNumber(), 5);
-    assert.equal(body.scene_id, '1256');
+    // 卡片场景号 1007（旧值 1256 是登录分享链路的场景，卡片不是它）
+    assert.equal(body.scene_id, '1007');
     assert.equal(body.sharer_open_id, 'op-77');
     assert.equal(Long.fromValue(body.sharer_id).toNumber(), 77);
+    assert.equal(body.share_key, '');
+});
+
+test('强制添加：只发 ReportArkClick，并把 share_key 与 openid 一起带上', async () => {
+    clicks.length = 0;
+
+    const outcome = await invite.forceAddSharer({
+        uid: '888', openid: 'op-888', shareKey: 'key-888', shareSource: '8', name: '测试号', level: 66,
+    });
+
+    assert.equal(clicks.length, 1, '强制添加只需一个请求');
+    assert.equal(clicks[0].method, 'ReportArkClick');
+    const Long = require('long');
+    const body = clicks[0].body;
+    assert.equal(Long.fromValue(body.sharer_id).toNumber(), 888);
+    assert.equal(body.sharer_open_id, 'op-888');
+    // 字段号以反编译为准：scene_id=3 / share_cfg_id=4 / share_key=5
+    assert.equal(body.scene_id, '1007');
+    assert.equal(Long.fromValue(body.share_cfg_id).toNumber(), 8);
+    assert.equal(body.share_key, 'key-888');
+    // 回包 relation.is_friend 是「真的绑上了」的硬判定
+    assert.equal(outcome.ok, true);
+    assert.equal(outcome.isFriend, true);
+});
+
+test('强制添加缺 openid 时本地跳过，不发请求', async () => {
+    clicks.length = 0;
+
+    const outcome = await invite.forceAddSharer({ uid: '999', shareKey: 'key-999' });
+
+    assert.equal(clicks.length, 0);
+    assert.equal(outcome.skipped, true);
+    assert.match(outcome.error, /openid/);
+});
+
+test('犬种映射按 dog_id 落到中文名', () => {
+    assert.equal(invite.dogBreedName(0), '无狗');
+    assert.equal(invite.dogBreedName(90011), '柯基');
+    assert.equal(invite.dogBreedName(undefined), '无狗');
 });
 
 test('单条失败不中断整批，处理完仍清空文件', async () => {

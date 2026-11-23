@@ -20,12 +20,17 @@ const APPLY_PENDING_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 interface PoolItem {
     uid: string; openid: string; shareKey: string; shareSource: string; docId: string;
-    cardTime: string; name: string; level: number; visitClosed?: boolean;
+    cardTime: string; name: string; level: number; dogBreed?: string; identifiedAt?: number;
+    visitClosed?: boolean;
     firstSeenAt: number; updatedAt: number;
 }
 interface ApplyState {
     status: string; lastApplyAt: number | null; applyCount: number;
     deadAt: number | null; deadReason: string; updatedAt: number;
+    /** 最后一次成功的动作是申请还是强制直加 */
+    mode?: 'apply' | 'force';
+    /** 强制直加时服务端回包 relation.is_friend（true = 真的绑上了） */
+    arkBound?: boolean;
 }
 interface PoolData {
     version: number;
@@ -119,6 +124,7 @@ function upsertItems(items: any[]): { added: number; updated: number } {
         if (!target) {
             pool.items[uid] = {
                 uid, ...incoming, name: String(raw?.name || ''), level: Number(raw?.level) || 0,
+                ...(raw?.dogBreed ? { dogBreed: String(raw.dogBreed) } : {}),
                 firstSeenAt: Date.now(), updatedAt: Date.now(),
             };
             owners.set(id, uid);
@@ -165,6 +171,8 @@ function snapshot(accountId: string): any {
         status: statusOf(applies[item.uid]),
         applyCount: Number(applies[item.uid]?.applyCount) || 0,
         lastApplyAt: applies[item.uid]?.lastApplyAt || null,
+        mode: applies[item.uid]?.mode || '',
+        arkBound: applies[item.uid]?.arkBound === true,
     }));
     items.sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
     const limit = pool.limits[String(accountId || 'default')];
@@ -227,13 +235,40 @@ function markDead(accountId: string, uid: string, reason: string): void {
     save();
 }
 
-function updateProfile(uid: string, extra: { name?: string; level?: number }): void {
+function updateProfile(uid: string, extra: { name?: string; level?: number; dogBreed?: string }): void {
     const pool = load();
     const item = pool.items[String(uid)];
     if (!item) return;
     if (extra.name) item.name = String(extra.name);
     if (Number(extra.level) > 0) item.level = Number(extra.level);
+    if (extra.dogBreed) item.dogBreed = String(extra.dogBreed);
+    if (extra.name || Number(extra.level) > 0 || extra.dogBreed) item.identifiedAt = Date.now();
     item.updatedAt = Date.now();
+    save();
+}
+
+/**
+ * 强制添加（ReportArkClick）后的记账：服务端回包 relation.is_friend 才是硬判定。
+ * bound=false 表示请求发出去了但服务端没绑定（openid 与 share_key 不匹配 / 对方好友位满）。
+ */
+function markArkApplied(accountId: string, uid: string, bound: boolean): void {
+    const pool = load();
+    const key = String(uid);
+    const applies = appliesFor(accountId);
+    const state = applies[key] || { status: 'new', applyCount: 0, lastApplyAt: null, deadAt: null, deadReason: '', updatedAt: 0 };
+    state.lastApplyAt = Date.now();
+    state.applyCount = (state.applyCount || 0) + 1;
+    state.mode = 'force';
+    state.arkBound = !!bound;
+    state.updatedAt = Date.now();
+    if (bound) {
+        state.status = 'friend';
+    } else {
+        // 没绑上：标成 pending 让下一轮还能再试（不写成 dead，避免误杀有效卡片）。
+        state.status = 'pending';
+        state.deadReason = '强制添加未绑定（openid 与 share_key 可能不匹配）';
+    }
+    applies[key] = state;
     save();
 }
 
@@ -282,5 +317,6 @@ function loadFriendGidSet(): Set<string> {
 
 module.exports = {
     upsertItems, snapshot, getStatusMap, markApplied, markFriend, markDead,
-    updateProfile, removeItem, dailyLimitBlocked, markDailyLimit, clearDailyLimit, loadFriendGidSet,
+    updateProfile, removeItem, dailyLimitBlocked, markDailyLimit, clearDailyLimit,
+    loadFriendGidSet, markArkApplied,
 };

@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.35.5 | #235 | 2026-11-23 | 采集器接轨与强制添加协议修正 | — |
 | v3.35.3 | #233 | 2026-11-23 | 日志滚动、号池导入与今日统计修正 | — |
 | v3.35.2 | #232 | 2026-11-23 | 点券限时礼包查询与购买改走保命流量 | — |
 | v3.35.1 | #231 | 2026-11-23 | 牧场统计与侧栏文案校正，修复宿主模式入站静默误判 | — |
@@ -234,6 +235,15 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-23 · v3.35.5（#235） · 采集器接轨与强制添加协议修正
+
+- **`ReportArkClick` 协议修正（关键）**：字段号按反编译改回 `sharer_id=1 / sharer_open_id=2 / scene_id=3 / share_cfg_id=4 / share_key=5`。旧版把 `scene_id` 与 `share_cfg_id` 写反（int64 与 string 的 wire type 对不上，服务端当未知字段丢掉）且完全没带 `share_key`，所以「上报点击」一直跑得通、日志也好看，但从来没真正加过好友。回包补 `corepb.RelationInfo relation`，`relation.is_friend` 是当场判定是否绑定成功的唯一可靠依据。
+- **新增强制添加（免同意直加）**：只发 `UserService.ReportArkClick`，服务端几秒内直接绑定，无需对方同意、不需要 `Enter`、不需要「点击分享链接可拜访好友」开关。硬约束是 `openid` 必须与 `share_key` 的主人一致，缺 openid 的条目本地跳过不发请求。`applyInviteList` 增加 `mode: 'apply' | 'force'`，界面可按次切换。
+- **接受分享卡片的资料识别**：`Enter` 回包补 `host_relation`（是否已是好友）/ `is_tourist` / `unix_milli`，`brief_dog_info.dog_id` 映射犬种（无狗/田园犬/牧羊犬/斑点狗/柯基/护主犬）。申请前先判 `is_friend`，已是好友的直接跳过不浪费额度；昵称、等级、犬种顺手回填号池。
+- **采集器兼容层**：新增 `POST /api/auto-friend/pool/import`（吃 `{users:[{gid,shareKey,openid,shareCfgId}]}`，返回 `{added,updated,skipped,parsed}`）与 `GET /api/auto-friend/pool`，路径与字段完全对齐外部采集器（card-collector 的 `collect.py` / `server.py`），采集器端只需把 `PANEL_URL` 指向本面板、`PANEL_PASS` 改成本机密码，脚本一行不用改。导入规则放宽为「uid 必填，openid 与 shareKey 至少有一个」，只带 shareKey 的合法卡片不再被丢弃。
+- **号池记账**：状态新增 `mode` 与 `arkBound`；`markArkApplied(bound=false)` 记 `pending` 留待下一轮，不误判成死链。界面显示犬种、缺 openid 直接标注，「好友申请」页新增模式切换与采集器配置块。
+- 新增 `docs/collector-integration.md`：采集器用法、接口契约、两条加好友链路对比、接轨步骤与排障关键字。
 
 ### 2026-11-23 · v3.35.3（#233） · 日志滚动、号池导入与今日统计修正
 
