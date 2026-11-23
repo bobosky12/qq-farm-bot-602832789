@@ -87,11 +87,32 @@ function inScene(run: (cells: any) => Promise<any>): Promise<any> {
             return result;
         } finally {
             if (previous !== 2 && network.getWs() === socket) {
+                const restore = () => runWithSendContext({ check: () => null, onSent: () => {} }, () => network.loginGameScene(previous));
+                let restoreError: any = null;
                 try {
                     // 调用方取消后仍在原队列任务中恢复场景。
-                    await runWithSendContext({ check: () => null, onSent: () => {} }, () => network.loginGameScene(previous));
-                } catch (error: any) {
-                    logWarn('牧场', `恢复场景 ${previous} 失败：${error.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
+                    await restore();
+                } catch (firstError: any) {
+                    restoreError = firstError;
+                    // 连接已经很久没有入站数据（心跳也收不到）时重试只会再拖 20 秒，
+                    // 直接判死走重登更快恢复；只有「连接还有心跳、只是单次请求超时」才值得重试。
+                    const silenceMs = Number(network.getInboundSilenceMs?.() || 0);
+                    if (silenceMs > 15000) {
+                        logWarn('牧场', `恢复场景 ${previous} 失败（连接已静默 ${Math.round(silenceMs / 1000)} 秒）：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
+                    } else {
+                        logWarn('牧场', `恢复场景 ${previous} 首次失败，1.5 秒后重试：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore_retry' });
+                        try {
+                            await new Promise(resolve => setTimeout(resolve, 1500));
+                            if (network.getWs() !== socket) throw firstError;
+                            await restore();
+                            restoreError = null;
+                        } catch (retryError: any) {
+                            restoreError = retryError;
+                            logWarn('牧场', `恢复场景 ${previous} 重试仍失败：${retryError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
+                        }
+                    }
+                }
+                if (restoreError) {
                     network.invalidateGameScene('牧场操作结束后场景恢复未确认，需要重新登录');
                     if (result) Object.assign(result, { sceneRestored: false, refreshRequired: true, notice: '场景恢复未确认，账号需重新登录；请刷新核对操作结果' });
                 }

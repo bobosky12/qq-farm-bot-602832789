@@ -53,9 +53,11 @@ interface RuntimeConfig extends SystemConfig {
 
 // clientVersion 由 CONFIG.clientVersion 动态获取，不写死在预设中
 // Verified in the official QQ PlayerLogin and Heartbeat from the 2026-11-16 capture.
-const DEFAULT_CLIENT_VERSION = '1.17.0.6_20261117';
-const DEFAULT_CLIENT_VERSION_UPDATED_AT = 1795287073693;
-// 2026-11-22 实测抓包：服务端已升到 1.17.0.6（微信小程序），旧版 1.17.0.4 会被“Code 或版本不符”拒连。
+// QQ 与微信版本不同步：1.17.0.6 是微信小程序抓包结果，QQ 仍以 1.17.0.3 为基线（用户 store 里是 1.17.0.4）。
+// 把 QQ 也改成 1.17.0.6 会导致连接阶段直接关闭码 400（Code 或版本不符）。
+const DEFAULT_CLIENT_VERSION = '1.17.0.3_20261117';
+const DEFAULT_CLIENT_VERSION_UPDATED_AT = 1794795016627;
+// 2026-11-22 实测抓包：微信小程序已升到 1.17.0.6，旧版 1.17.0.4 会被“Code 或版本不符”拒连。
 const DEFAULT_WX_CLIENT_VERSION = '1.17.0.6_20261117';
 const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT = 1795287073693;
 const DEFAULT_TIME_ZONE = 'Asia/Shanghai';

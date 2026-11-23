@@ -18,9 +18,11 @@ test('QQ and WeChat versions can be configured independently', () => {
         CONFIG.clientVersion = '';
         CONFIG.wxClientVersion = '';
         assert.equal(DEFAULT_WX_CLIENT_VERSION, '1.17.0.6_20261117');
+        // 两个平台的默认版本不同步：微信 1.17.0.6（小程序抓包），QQ 仍是 1.17.0.3 基线。
         for (const platform of ['qq', 'wx', 'wechat']) {
             CONFIG.platform = platform;
-            assert.equal(getClientVersion(), DEFAULT_CLIENT_VERSION);
+            const expected = platform === 'qq' ? DEFAULT_CLIENT_VERSION : DEFAULT_WX_CLIENT_VERSION;
+            assert.equal(getClientVersion(), expected);
         }
         CONFIG.clientVersion = 'custom-version';
         CONFIG.platform = 'wx';
@@ -40,11 +42,12 @@ test('decoded WeChat login uses configured device fields and does not invent a l
     const saved = { platform: CONFIG.platform, clientVersion: CONFIG.clientVersion, deviceInfo: CONFIG.deviceInfo };
     try {
         CONFIG.platform = 'wx';
-        CONFIG.clientVersion = DEFAULT_CLIENT_VERSION;
+        CONFIG.clientVersion = DEFAULT_WX_CLIENT_VERSION;
+        CONFIG.wxClientVersion = DEFAULT_WX_CLIENT_VERSION;
         CONFIG.deviceInfo = { sysSoftware: 'Windows test', network: 'wifi', memory: '8192', deviceId: 'test-device' };
         const decode = () => types.PlayerLoginRequest.toObject(types.PlayerLoginRequest.decode(buildLoginBody()), { longs: String });
         const wx = decode();
-        assert.deepEqual(wx.device_info, { client_version: DEFAULT_CLIENT_VERSION, sys_software: 'Windows test', network: 'wifi', memory: '8192', device_id: 'test-device' });
+        assert.deepEqual(wx.device_info, { client_version: DEFAULT_WX_CLIENT_VERSION, sys_software: 'Windows test', network: 'wifi', memory: '8192', device_id: 'test-device' });
         assert.equal(wx.share_key, '');
         assert.equal(wx.game_scene_id, 1);
         assert.deepEqual(Object.keys(wx.report_data).sort(), ['minigame_channel', 'minigame_platid']);
@@ -54,6 +57,7 @@ test('decoded WeChat login uses configured device fields and does not invent a l
         CONFIG.deviceInfo.memory = 'invalid';
         assert.equal(Object.hasOwn(decode().device_info, 'memory'), false);
         CONFIG.platform = 'qq';
+        CONFIG.clientVersion = DEFAULT_CLIENT_VERSION;
         const qq = types.PlayerLoginRequest.toObject(types.PlayerLoginRequest.decode(buildLoginBody()), { longs: String });
         assert.equal(qq.device_info.client_version, DEFAULT_CLIENT_VERSION);
         assert.equal(qq.report_data.minigame_channel, 'other-qq');

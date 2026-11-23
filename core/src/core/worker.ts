@@ -184,6 +184,13 @@ let shutdownStarted: boolean = false;
 let runtimeGeneration: number = 0;
 let lastDailyRunDate: string = '';
 let ranchRoutineQueued = false;
+// 场景切换保护：牧场例程会切到场景 2 再切回，必须避开农场/好友巡查。
+// 否则登录后立刻切场景，与农场巡检的请求交错，会出现 game_scene_unknown
+// （场景未确认）→ 恢复场景超时 → 整条连接被判死 → 一登就掉线。
+let initialFarmCheckDone = false;
+let initialFriendCheckDone = false;
+/** 登录成功时间：首轮巡查迟迟未完成的兜底放行（见 runRanchRoutine）。 */
+let loginAtMs = 0;
 
 // 上游 PR #159/#157：图鉴奖励红点与牧场设施变更都变成即时唤醒，不再等 5 分钟轮询。
 function onRanchBookReward(kind: 'normal' | 'giant', available: boolean): void {
@@ -213,10 +220,18 @@ function onRanchMarketVisitChanged(rotation: any): void {
 
 function runRanchRoutine(detached = false): Promise<void> {
     if (ranchRoutineQueued || !loginReady) return Promise.resolve();
+    // 与上游一致：首轮农场/好友巡查完成前不碰牧场场景；农场/好友正在跑时也不插进去。
+    // 兜底：登录 3 分钟后即使首轮巡查一直没成功，也允许牧场例程跑（避免永久不执行）。
+    const settled = initialFarmCheckDone && initialFriendCheckDone;
+    const graceExpired = loginAtMs > 0 && Date.now() - loginAtMs > 3 * 60_000;
+    if (!settled && !graceExpired) return Promise.resolve();
+    if (farmTaskRunning || friendTaskRunning) return Promise.resolve();
     const state = ranchAutomation.getRoutineState();
     if (state.doneToday || Date.now() < state.nextCheckAt) return Promise.resolve();
     ranchRoutineQueued = true;
     return runExclusiveAutomationTask('ranch_routine', async () => {
+        // 排队期间农场/好友可能已到期，拿到锁后再判一次，避免空切一次场景。
+        if (farmTaskRunning || friendTaskRunning) return;
         if (loginReady) await ranchAutomation.run();
     }, { detached }).finally(() => { ranchRoutineQueued = false; });
 }
@@ -510,6 +525,8 @@ async function runFarmTick(auto: any): Promise<void> {
         if (generation === runtimeGeneration) {
             nextFarmRunAt = planNextFarmRun(Date.now(), farmMs);
             farmTaskRunning = false;
+            // 无论本轮成功与否都算「已跑过一次」：牧场切场景只要求农场巡查不再首轮抢场景。
+            initialFarmCheckDone = true;
         }
     }
 }
@@ -528,6 +545,8 @@ async function runFriendTick(auto: any): Promise<void> {
     // friend 总开关仍控制好友任务总入口；关闭时也要推进到期时间，避免调度器每秒空转。
     if (!auto.friend) {
         nextFriendRunAt = Date.now() + helpMs;
+        // 好友任务整体关闭时，「首轮好友巡查」视为已完成，否则牧场例程永远不跑。
+        initialFriendCheckDone = true;
         return;
     }
 
@@ -559,6 +578,7 @@ async function runFriendTick(auto: any): Promise<void> {
         if (generation === runtimeGeneration) {
             nextFriendRunAt = Date.now() + helpMs;
             friendTaskRunning = false;
+            initialFriendCheckDone = true;
             scheduleUnifiedNextTick();
         }
     }
@@ -1101,6 +1121,10 @@ async function startBot(config: any): Promise<void> {
     const onLoginSuccess = async (): Promise<void> => {
         if (!canContinueLogin() || loginReady) return;
         loginReady = true;
+        // 每次登录/重登都重置场景切换保护：首轮巡查要重新完成。
+        initialFarmCheckDone = false;
+        initialFriendCheckDone = false;
+        loginAtMs = Date.now();
         if (onSellGain) {
             networkEvents.off('sell', onSellGain);
         }
