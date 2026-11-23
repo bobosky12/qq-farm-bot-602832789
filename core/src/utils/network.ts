@@ -1756,6 +1756,9 @@ async function connectViaHost(code: string | null, onLoginSuccess?: () => void |
     // 宿主已有存活连接（worker 热重启）：直接复用会话，不重发 PlayerLogin。
     if (attached.connected && attached.session?.gid) {
         applyHostSession(attached.session);
+        // 心跳要带「当初登录用的版本」：热重启后本地配置可能已经改过，
+        // 版本号一变服务器就可能不认这条会话。
+        if (attached.session.clientVersion) context.clientVersion = String(attached.session.clientVersion);
         adapter.readyState = 1;
         context.phase = 'online';
         context.onlineMono = performance.now();
