@@ -91,8 +91,10 @@ function createCouponGiftBuyer(
 const autoBuyCouponGifts = createCouponGiftBuyer({
     getAutomation,
     getBalance: () => getCouponBalance(getUserState()),
-    getGoods: () => getMallGoodsList(MALL_COUPON_SLOT_TYPE),
-    purchase: purchaseMallGoods,
+    // 点券限时礼包是每 10 分钟一次的高价值短窗口任务：查询与购买走保命流量，
+    // 避免被放虫/放草这类高频自动任务的 180/60s 总量额度挤掉（老版本一直因此失败）。
+    getGoods: () => getMallGoodsList(MALL_COUPON_SLOT_TYPE, 'critical'),
+    purchase: (goodsId: number, count: number) => purchaseMallGoods(goodsId, count, 'critical'),
     report: (message: string, result: string) => log('商城', message, { module: 'shop', event: '点券限时礼包自动购买', result }),
 });
 

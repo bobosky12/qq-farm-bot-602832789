@@ -23,29 +23,31 @@ let freeGiftDoneDateKey: string = '';
 let freeGiftLastAt: number = 0;
 let freeGiftLastCheckAt: number = 0;
 
-async function getMallListBySlotType(slotType: number = 1, subSlotType: number = 0): Promise<any> {
+async function getMallListBySlotType(slotType: number = 1, subSlotType: number = 0, requestClass?: 'critical' | 'foreground'): Promise<any> {
     const body: Uint8Array = types.GetMallListBySlotTypeRequest.encode(types.GetMallListBySlotTypeRequest.create({
         slot_type: Number(slotType) || 1,
         is_manual_open: Number(subSlotType) === 1,
         global_scene_id: 1,
     })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'GetMallListBySlotType', body);
+    const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'GetMallListBySlotType', body,
+        requestClass ? { requestClass } : undefined);
     return types.GetMallListBySlotTypeResponse.decode(replyBody);
 }
 
-async function purchaseMallGoods(goodsId: number, count: number = 1): Promise<any> {
+async function purchaseMallGoods(goodsId: number, count: number = 1, requestClass?: 'critical' | 'foreground'): Promise<any> {
     const body: Uint8Array = types.PurchaseRequest.encode(types.PurchaseRequest.create({
         goods_id: Number(goodsId) || 0,
         count: Number(count) || 1,
     })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'Purchase', body);
+    const { body: replyBody } = await sendMsgAsync('gamepb.mallpb.MallService', 'Purchase', body,
+        requestClass ? { requestClass } : undefined);
     const reply = types.PurchaseResponse.decode(replyBody);
     if (reply.success !== true) throw new Error('商城未确认购买成功，请刷新核对');
     return reply;
 }
 
-async function getMallGoodsList(slotType: number = 1): Promise<any[]> {
-    const mall: any = await getMallListBySlotType(slotType);
+async function getMallGoodsList(slotType: number = 1, requestClass?: 'critical' | 'foreground'): Promise<any[]> {
+    const mall: any = await getMallListBySlotType(slotType, 0, requestClass);
     const raw: any[] = Array.isArray(mall && mall.goods_list) ? mall.goods_list : [];
     return raw.flatMap((entry: any) => {
         if (!Buffer.isBuffer(entry) && !(entry instanceof Uint8Array)) return entry ? [entry] : [];
