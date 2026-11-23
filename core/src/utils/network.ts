@@ -16,6 +16,7 @@ const cryptoWasm = require('./crypto-wasm');
 const { GatewayTokenProvider } = require('./gateway-token');
 const { MAX_HEARTBEAT_MISSES, shouldTerminateForHeartbeat, shouldTerminateForSilence } = require('./keepalive-policy');
 const { countBlockingQueuedRequests, shouldLogRequestPressure } = require('./request-pressure');
+const { HostClient } = require('../host/host-client');
 const {
     checkRequest: checkRequestBudget,
     recordSent: recordRequestSent,
@@ -504,6 +505,30 @@ async function sendMsg(
     requestClass: RequestClass = 'foreground',
     hooks?: Pick<SendMsgOptions, 'beforeSend' | 'onSent'>,
 ): Promise<boolean> {
+    // 连接宿主模式：把**明文** body 交给宿主，加密 / token / 信封都在那边完成。
+    if (isHostTransportEnabled()) {
+        if (!isCurrentConnection(context) || (context.socket as any).readyState !== WebSocket.OPEN) {
+            log('系统', '[WS] 连接未打开');
+            return false;
+        }
+        const seq = clientSeq;
+        clientSeq += 1;
+        if (pending) pendingCallbacks.set(seq, pending);
+        const blocked = hooks?.beforeSend?.();
+        if (blocked) throw blocked;
+        try {
+            hostState.client.sendRpc(seq, serviceName, methodName, bodyBytes || Buffer.alloc(0));
+            hooks?.onSent?.();
+        } catch (err: any) {
+            if (pending) {
+                pendingCallbacks.delete(seq);
+                invokePendingCallback(pending.callback, err);
+            }
+            return false;
+        }
+        try { recordRequestSent(serviceName, methodName, requestClass); } catch {}
+        return true;
+    }
     if (!isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
         log('系统', '[WS] 连接未打开');
         return false;
@@ -1172,7 +1197,7 @@ async function sendLogin(context: ConnectionContext, onLoginSuccess?: () => void
         console.warn('');
 
         try {
-            if (userState.openId) {
+            if (userState.openId && !isHostTransportEnabled()) {
                 await cryptoWasm.bindUser(userState.openId);
                 const initTokenLength = gatewayTokens.stageInitToken(cryptoWasm.getEncryptedInitInfo());
                 if (initTokenLength > 0) {
@@ -1183,10 +1208,25 @@ async function sendLogin(context: ConnectionContext, onLoginSuccess?: () => void
             networkScheduler.clear('login_timeout');
             context.phase = 'online';
             context.onlineMono = performance.now();
-            startAceRuntime((service: string, method: string, body: Buffer, timeoutMs?: number) => (
-                sendMsgAsync(service, method, body, { timeoutMs, priority: 'high', criticalLane: 'ace' })
-            ));
-            startHeartbeat(context);
+            if (isHostTransportEnabled()) {
+                // 心跳 / ACE（TSDK）都在宿主：把会话参数交过去，由宿主接管。
+                // 这样 worker 重启时连接、心跳、反作弊数据流都不中断。
+                try {
+                    hostState.client?.sendSession({
+                        gid: userState.gid,
+                        openId: userState.openId,
+                        clientVersion: context.clientVersion,
+                        heartbeatInterval: CONFIG.heartbeatInterval,
+                    });
+                } catch (error: any) {
+                    logWarn('系统', `同步会话到宿主失败: ${error?.message || error}`);
+                }
+            } else {
+                startAceRuntime((service: string, method: string, body: Buffer, timeoutMs?: number) => (
+                    sendMsgAsync(service, method, body, { timeoutMs, priority: 'high', criticalLane: 'ace' })
+                ));
+                startHeartbeat(context);
+            }
             // 登录引导阶段串行完成普通请求，避免和后续活动、背包初始化同时挤入 Gateway。
             await fetchUserSettings();
             if (!isCurrentConnection(context)) return;
@@ -1388,7 +1428,251 @@ function finalizeConnection(context: ConnectionContext, details: DisconnectDetai
 }
 
 // ============ WebSocket 连接 ============
+// ==================== 连接宿主（host）远程传输模式 ====================
+//
+// 开关：FARM_SOCKET_HOST=1 + FARM_HOST_PIPE + FARM_HOST_TOKEN（由主进程 fork 宿主时注入）。
+// 开启后：
+//   - WS 连接、心跳、上行加密（TSDK）、ACE 全部在宿主进程里，worker 只管业务；
+//   - worker 重启（热更新）时宿主保持连接与心跳，新 worker attach 后可直接复用会话；
+//   - 业务 proto / 调度 / 配置 / 数据 / UI 的变更不再导致掉线。
+// 关闭（默认）时保持原有「worker 内直连」行为，完全不改现有部署。
+
+const hostState: { client: any; adapter: HostSocketAdapter | null; session: any } = { client: null, adapter: null, session: null };
+
+function isHostTransportEnabled(): boolean {
+    return String(process.env.FARM_SOCKET_HOST || '') === '1'
+        && !!String(process.env.FARM_HOST_PIPE || '')
+        && !!String(process.env.FARM_HOST_TOKEN || '');
+}
+
+/**
+ * 伪 WebSocket：只为让 connect() 里既有逻辑（readyState 判断 / 事件绑定 / terminate）成立。
+ * 真正的字节收发都在宿主，所以 send() 直接抛错——remote 分支不会走到它。
+ */
+class HostSocketAdapter {
+    readyState: number = 0;
+    binaryType: string = 'arraybuffer';
+    private listeners: Map<string, Array<(...args: any[]) => void>> = new Map();
+
+    on(event: string, handler: (...args: any[]) => void): this {
+        const list = this.listeners.get(event) || [];
+        list.push(handler);
+        this.listeners.set(event, list);
+        return this;
+    }
+
+    once(event: string, handler: (...args: any[]) => void): this {
+        const wrapper = (...args: any[]) => {
+            this.off(event, wrapper);
+            handler(...args);
+        };
+        return this.on(event, wrapper);
+    }
+
+    off(event: string, handler: (...args: any[]) => void): this {
+        const list = this.listeners.get(event);
+        if (!list) return this;
+        this.listeners.set(event, list.filter(item => item !== handler));
+        return this;
+    }
+
+    emit(event: string, ...args: any[]): void {
+        for (const handler of [...(this.listeners.get(event) || [])]) {
+            try { handler(...args); } catch (error: any) { logWarn('系统', `宿主事件处理失败(${event}): ${error?.message || error}`); }
+        }
+    }
+
+    send(): void {
+        throw new Error('远程传输模式下不应直接写 socket');
+    }
+
+    terminate(): void {
+        this.readyState = 3;
+        try { hostState.client?.close(); } catch {}
+        this.emit('close', 0, 'terminated');
+    }
+
+    close(): void {
+        this.terminate();
+    }
+}
+
+/** 拿到（或创建）宿主客户端并完成 attach；返回宿主当前的连接/会话快照。 */
+async function attachHostClient(): Promise<{ connected: boolean; session: any }> {
+    if (hostState.client) {
+        const info = await hostState.client.attach();
+        return { connected: !!info?.connected, session: info?.session || null };
+    }
+    const client = new HostClient({
+        pipeName: String(process.env.FARM_HOST_PIPE || ''),
+        token: String(process.env.FARM_HOST_TOKEN || ''),
+    });
+    const info = await client.attach();
+    hostState.client = client;
+    return { connected: !!info?.connected, session: info?.session || null };
+}
+
+/** 宿主 → worker 的入站分发（remote 模式专用；本地模式仍走 handleMessage）。 */
+function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
+    const meta = frame.meta || {};
+    const context = currentConnection;
+    const adapter = hostState.adapter;
+    switch (String(meta.t || '')) {
+        case 'open': {
+            if (!context || !adapter) return;
+            if (adapter.readyState !== 1) adapter.readyState = 1;
+            adapter.emit('open');
+            return;
+        }
+        case 'msg': {
+            const seq = toNum(meta.seq);
+            const errorCode = toNum(meta.errorCode);
+            const pending = pendingCallbacks.get(seq);
+            try { recordRequestOutcome(String(meta.service || ''), String(meta.method || ''), errorCode === 0); } catch {}
+            if (!pending) return;
+            pendingCallbacks.delete(seq);
+            if (errorCode !== 0 && !pending.expectedErrorCodes.has(errorCode)) {
+                invokePendingCallback(pending.callback, new GatewayError({
+                    service_name: meta.service, method_name: meta.method,
+                    error_code: errorCode, error_message: meta.errorMessage || '',
+                } as any));
+                return;
+            }
+            invokePendingCallback(pending.callback, null, frame.body || Buffer.alloc(0), meta);
+            return;
+        }
+        case 'notify': {
+            // body 是 EventMessage 字节：事件类型随业务演进，解码留在 worker。
+            handleNotify({ body: frame.body || Buffer.alloc(0) });
+            return;
+        }
+        case 'server-time': {
+            const serverTime = toNum(meta.serverTime);
+            if (serverTime > 0) syncServerTime(serverTime);
+            return;
+        }
+        case 'send-err': {
+            const seq = toNum(meta.seq);
+            const pending = pendingCallbacks.get(seq);
+            if (!pending) return;
+            pendingCallbacks.delete(seq);
+            invokePendingCallback(pending.callback, new Error(String(meta.message || '发送失败')));
+            return;
+        }
+        case 'close': {
+            if (!context) return;
+            finalizeConnection(context, { source: 'ws_close', reason: `远端连接关闭 code=${meta.code || 0}`, code: toNum(meta.code) } as any);
+            adapter?.emit('close', toNum(meta.code), String(meta.reason || ''));
+            return;
+        }
+        case 'dead': {
+            if (!context) return;
+            log('心跳', `宿主判定连接已死：${String(meta.reason || '')}`);
+            finalizeConnection(context, { source: 'heartbeat_timeout', reason: String(meta.reason || '心跳超时') } as any);
+            adapter?.emit('close', 1006, 'heartbeat_timeout');
+            return;
+        }
+        case 'socket-error': {
+            adapter?.emit('error', new Error(String(meta.message || '连接错误')));
+            return;
+        }
+        case 'session-ok':
+            log('系统', '宿主已接管会话（心跳 / ACE 由宿主持有）');
+            return;
+        default:
+            return;
+    }
+}
+
+/**
+ * remote 模式的建连：握手参数仍由业务层构造（版本、平台、code 都是业务决策），
+ * 宿主只负责实际握手 + 后续心跳/加密。
+ */
+async function connectViaHost(code: string | null, onLoginSuccess?: () => void | Promise<void>): Promise<void> {
+    const authCode = String(code || '').trim();
+    if (!authCode) throw new Error('连接缺少一次性 Code');
+    if (currentConnection && !currentConnection.finalized) throw new Error('WebSocket 连接已存在');
+
+    clientSeq = 1;
+    serverSeq = 0;
+    lastInboundMono = performance.now();
+    lastHeartbeatMono = performance.now();
+    heartbeatMissCount = 0;
+
+    const clientVersion = getClientVersion();
+    const url = new URL(CONFIG.serverUrl);
+    url.search = new URLSearchParams({
+        platform: isWechatPlatform() ? 'wx' : CONFIG.platform,
+        os: CONFIG.os,
+        ver: clientVersion,
+        code: authCode,
+    }).toString();
+    const di = CONFIG.deviceInfo || {};
+    const headers = {
+        'User-Agent': di.userAgent || 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13)',
+        'Origin': 'https://gate-obt.nqf.qq.com',
+    };
+
+    let attached: { connected: boolean; session: any } = { connected: false, session: null };
+    try {
+        attached = await attachHostClient();
+    } catch (error: any) {
+        // 宿主不可用时本进程内降级为直连；必须关掉开关，否则 connect() 会再次进入远程分支形成死循环。
+        process.env.FARM_SOCKET_HOST = '0';
+        logWarn('系统', `连接宿主不可用，回退到 worker 内直连: ${error?.message || error}`);
+        return connect(code, onLoginSuccess);
+    }
+
+    const adapter = new HostSocketAdapter();
+    const context: ConnectionContext = {
+        id: nextConnectionId++,
+        socket: adapter as any,
+        phase: 'connecting',
+        intentionalClose: false,
+        finalized: false,
+        loginInitialized: false,
+        clientVersion,
+        startedMono: performance.now(),
+    };
+    currentConnection = context;
+    ws = adapter as any;
+    hostState.adapter = adapter;
+    hostState.session = attached.session;
+
+    hostState.client.onFrame((frame: any) => {
+        if (!isCurrentConnection(context)) return;
+        handleHostFrame(frame);
+    });
+
+    // 宿主已有存活连接（worker 热重启）：直接复用会话，不重发 PlayerLogin。
+    if (attached.connected && attached.session?.gid) {
+        const session = attached.session;
+        adapter.readyState = 1;
+        userState.gid = toNum(session.gid);
+        if (session.openId) userState.openId = String(session.openId);
+        context.phase = 'online';
+        context.onlineMono = performance.now();
+        context.loginInitialized = true;
+        log('系统', `已复用宿主存活连接（gid=${session.gid}），无需重新登录`);
+        try {
+            await onLoginSuccess?.();
+        } catch (error: any) {
+            logWarn('系统', `会话恢复回调失败: ${error?.message || error}`);
+        }
+        return;
+    }
+
+    hostState.client.connectGateway(url.toString(), headers);
+}
+
 function connect(code: string | null, onLoginSuccess?: () => void | Promise<void>): void {
+    if (isHostTransportEnabled()) {
+        // 连接宿主模式：WS / 心跳 / 加密 / ACE 都在宿主，这里只把握手参数交过去。
+        void connectViaHost(code, onLoginSuccess).catch((error: any) => {
+            logWarn('系统', `远程建连失败: ${error?.message || error}`);
+        });
+        return;
+    }
     const authCode = String(code || '').trim();
     if (!authCode) throw new Error('连接缺少一次性 Code');
     if (currentConnection && !currentConnection.finalized) throw new Error('WebSocket 连接已存在');
@@ -1473,6 +1757,10 @@ function connect(code: string | null, onLoginSuccess?: () => void | Promise<void
 
 function cleanup(reason = '网络清理'): void {
     const context = currentConnection;
+    if (isHostTransportEnabled()) {
+        // 用户主动停号：让宿主关闭网关连接，否则会留下一条没有 worker 的孤儿连接。
+        try { hostState.client?.requestGatewayClose(); } catch {}
+    }
     if (!context) {
         clearNetworkRuntime(reason);
         return;

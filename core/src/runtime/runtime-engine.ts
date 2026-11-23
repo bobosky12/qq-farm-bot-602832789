@@ -71,7 +71,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
     // 保活回调要在 workerManager 之后才能拿到 restartWorker，这里用一层间接引用避免循环依赖。
     const wxKeepAliveBridge: { notify?: (accountId: string, accountName: string, reason: string) => void } = {};
 
-    const { startWorker, stopWorker, restartWorker, callWorkerApi } = createWorkerManager({
+    const { startWorker, stopWorker, restartWorker, callWorkerApi, stopAllHosts } = createWorkerManager({
         fork,
         WorkerThread: Worker,
         runtimeMode,
@@ -229,6 +229,8 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         for (const accountId of Object.keys(workers)) {
             stopWorker(accountId);
         }
+        // 连接宿主不随 worker 退出：主进程整体停服时统一回收，避免孤儿进程占着连接。
+        stopAllHosts();
     }
 
     return {

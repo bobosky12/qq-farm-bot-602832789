@@ -14,7 +14,8 @@ test('登录回包的 async callback 必须经统一包装，否则 Node 20 未�
     assert.match(network, /function invokePendingCallback\(/);
     assert.match(network, /Promise\.resolve\(result\)\.catch\(/);
     assert.doesNotMatch(network, /pending\.callback\(/, '还有直接调用 pending.callback 的地方');
-    assert.equal((network.match(/invokePendingCallback\(pending\.callback/g) || []).length, 5, '五个调用点都要走包装');
+    // 连接宿主（remote 传输）分支新增 4 处：sendMsg 的发送失败/异常，以及宿主回包与 send-err 的错误分发。
+    assert.equal((network.match(/invokePendingCallback\(pending\.callback/g) || []).length, 9, '所有 pending 回调都必须走包装');
 });
 
 test('请求超时只接受有限正数，Infinity / 负数不能在入队瞬间就判超时', () => {

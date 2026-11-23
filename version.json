@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 33,
-  "patch": 22,
-  "build": 225,
-  "version": "3.33.22",
-  "updatedAt": "2026-11-23T01:09:58.438Z",
+  "patch": 23,
+  "build": 226,
+  "version": "3.33.23",
+  "updatedAt": "2026-11-23T09:15:06.962Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.33.23",
+      "build": 226,
+      "date": "2026-11-23",
+      "summary": "连接宿主：把 WS / 心跳 / 签名 / ACE 从业务 worker 剥离（P0）",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.33.22",
       "build": 225,

@@ -1,5 +1,8 @@
 export {};
+const path = require('node:path');
+const fs = require('node:fs');
 const { createScheduler } = require('../services/scheduler');
+const { isSocketHostEnabled, createHostToken, hostPipeName } = require('../host/naming');
 // 账号维度的运行状态账本：面板据此显示「登录中 / 等待重登（倒计时）/ 停止中」。
 // 只在这里和 wx-keepalive 写，data-provider 读。
 const {
@@ -119,6 +122,92 @@ function createWorkerManager(options: WorkerManagerOptions) {
     const managerScheduler = createScheduler('worker_manager');
     const useThreadRuntime = runtimeMode === 'thread' && !(processRef as any).pkg && typeof WorkerThread === 'function';
 
+    // ==================== 连接宿主（socket host） ====================
+    // 每个账号一个宿主进程：持有 WS / 心跳 / 上行加密 / ACE，业务 worker 可随时热重启。
+    // 仅在 FARM_SOCKET_HOST=1 时启用；关闭时完全走原有直连，不影响现有部署。
+    const socketHostEnabled = isSocketHostEnabled(processRef.env || process.env);
+    /** 停号后宿主保持连接一段时间（便于热重启复用），超时后回收进程。 */
+    const HOST_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
+    const hosts: Record<string, { process: any; pipe: string; token: string }> = {};
+
+    function resolveHostEntry(): string {
+        const base = path.join(__dirname, '..', 'host');
+        const compiled = path.join(base, 'host-entry.js');
+        if (fs.existsSync(compiled)) return compiled;
+        return path.join(base, 'host-entry.ts');
+    }
+
+    function ensureHostProcess(account: any): { process: any; pipe: string; token: string } | null {
+        if (!socketHostEnabled) return null;
+        const id = String(account?.id || '');
+        if (!id) return null;
+        const existing = hosts[id];
+        if (existing && existing.process && existing.process.exitCode === null) {
+            managerScheduler.clear(`host_idle_${id}`);
+            return existing;
+        }
+        const pipe = hostPipeName(id);
+        const token = createHostToken();
+        const scriptPath = resolveHostEntry();
+        const forkOptions: any = {
+            stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+            env: {
+                ...(processRef.env || process.env),
+                FARM_HOST_ACCOUNT_ID: id,
+                FARM_HOST_PIPE: pipe,
+                FARM_HOST_TOKEN: token,
+            },
+        };
+        if (scriptPath.endsWith('.ts')) forkOptions.execArgv = ['--require', 'tsx/cjs'];
+        let child: any;
+        try {
+            child = fork(scriptPath, [], forkOptions);
+        } catch (error: any) {
+            log('系统', `连接宿主启动失败，账号将回退为直连: ${error?.message || error}`, { accountId: id });
+            return null;
+        }
+        const entry = { process: child, pipe, token };
+        hosts[id] = entry;
+        child.on('exit', (code: number) => {
+            log('系统', `连接宿主退出 (code=${code})`, { accountId: id });
+            if (hosts[id]?.process === child) delete hosts[id];
+        });
+        child.on('error', (error: any) => {
+            log('系统', `连接宿主异常: ${error?.message || error}`, { accountId: id });
+        });
+        log('系统', `已启动连接宿主（WS / 心跳 / 签名由其持有）`, { accountId: id });
+        return entry;
+    }
+
+    /** worker 启动时注入的宿主连接信息；未启用时返回空对象（保持直连）。 */
+    function hostEnvFor(accountId: string): Record<string, string> {
+        const host = hosts[String(accountId || '')];
+        if (!host) return {};
+        return { FARM_SOCKET_HOST: '1', FARM_HOST_PIPE: host.pipe, FARM_HOST_TOKEN: host.token };
+    }
+
+    /** 停号后延迟回收宿主：期间重新启动账号可复用同一条连接（worker 热重启场景）。 */
+    function scheduleHostIdleShutdown(accountId: string): void {
+        if (!socketHostEnabled) return;
+        managerScheduler.clear(`host_idle_${accountId}`);
+        managerScheduler.setTimeoutTask(`host_idle_${accountId}`, HOST_IDLE_SHUTDOWN_MS, () => {
+            if (workers[accountId]) return;
+            const host = hosts[accountId];
+            if (!host) return;
+            try { host.process.kill(); } catch {}
+            delete hosts[accountId];
+            log('系统', '连接宿主闲置回收', { accountId });
+        });
+    }
+
+    /** 主进程退出时统一收尾，避免留下孤儿宿主进程。 */
+    function stopAllHosts(): void {
+        for (const id of Object.keys(hosts)) {
+            try { hosts[id].process.kill(); } catch {}
+            delete hosts[id];
+        }
+    }
+
     function createThreadWorker(account: any): any {
         const workerOptions: any = {
             workerData: {
@@ -137,16 +226,19 @@ function createWorkerManager(options: WorkerManagerOptions) {
     }
 
     function createForkWorker(account: any): any {
+        // 连接宿主模式：先确保宿主进程已起，再把管道/令牌注入给 worker。
+        ensureHostProcess(account);
+        const hostEnv = hostEnvFor(String(account.id || ''));
         if ((processRef as any).pkg) {
             return fork(mainEntryPath, [], {
                 execPath: processRef.execPath,
                 stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-                env: { ...processRef.env, FARM_WORKER: '1', FARM_ACCOUNT_ID: String(account.id || '') },
+                env: { ...processRef.env, FARM_WORKER: '1', FARM_ACCOUNT_ID: String(account.id || ''), ...hostEnv },
             });
         }
         const forkOptions: any = {
             stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
-            env: { ...processRef.env, FARM_ACCOUNT_ID: String(account.id || '') },
+            env: { ...processRef.env, FARM_ACCOUNT_ID: String(account.id || ''), ...hostEnv },
         };
         if (workerScriptPath.endsWith('.ts')) {
             forkOptions.execArgv = ['--require', 'tsx/cjs'];
@@ -265,6 +357,8 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 setAccountRuntimeState(account.id, previous && previous.state === 'stopping' ? 'stopped' : 'offline', {
                     onlyFrom: ['stopping', 'logging_in', 'running'],
                 });
+                // worker 已退出但宿主还在：连接与心跳继续保持，延迟回收避免频繁重启时反复建连。
+                scheduleHostIdleShutdown(String(account.id));
             }
         });
         return true;
@@ -636,6 +730,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
         stopWorker,
         restartWorker,
         callWorkerApi,
+        stopAllHosts,
     };
 }
 
