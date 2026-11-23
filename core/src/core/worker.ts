@@ -218,6 +218,23 @@ function onRanchMarketVisitChanged(rotation: any): void {
     if (ranchAutomation.noteMarketVisit(rotation)) void runRanchRoutine(true).catch(() => null);
 }
 
+/**
+ * 连接宿主在 worker 离线期间丢了推送（缓存超量 / 超时）时发来的缺口提示：
+ * 事件流不再完整，安排一次全量巡查把状态拉回来，而不是靠残缺的增量事件继续跑。
+ */
+function onNotifyGap({ dropped }: { dropped?: number } = {}): void {
+    if (!loginReady || shutdownStarted) return;
+    log('推送', `宿主补发缺口（丢弃 ${toNum(dropped)} 条），安排一次全量巡查`, { module: 'system', event: 'notify_gap' });
+    networkEvents.emit('landsDirty', 'notify_gap');
+    setTimeout(() => {
+        if (!loginReady || shutdownStarted) return;
+        void runExclusiveAutomationTask('notify_gap_resync', async () => {
+            await checkFarm().catch(() => null);
+            await checkFriends().catch(() => null);
+        }).catch(() => null);
+    }, 3000);
+}
+
 function runRanchRoutine(detached = false): Promise<void> {
     if (ranchRoutineQueued || !loginReady) return Promise.resolve();
     // 与上游一致：首轮农场/好友巡查完成前不碰牧场场景；农场/好友正在跑时也不插进去。
@@ -1115,6 +1132,8 @@ async function startBot(config: any): Promise<void> {
     networkEvents.on('ranchMarketStockReady', wakeRanchMarketExchange);
     networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
     networkEvents.on('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+    networkEvents.off('notifyGap', onNotifyGap);
+    networkEvents.on('notifyGap', onNotifyGap);
 
     const generation = runtimeGeneration;
     const canContinueLogin = (): boolean => isRunning && !shutdownStarted && generation === runtimeGeneration;
@@ -1283,6 +1302,7 @@ function detachRuntimeListeners(): void {
     networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
     networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
     networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+    networkEvents.off('notifyGap', onNotifyGap);
     if (onDisconnected) {
         networkEvents.off('disconnected', onDisconnected);
         onDisconnected = null;

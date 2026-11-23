@@ -40,6 +40,11 @@ class HostClient {
         this.handlers.push(handler);
     }
 
+    /** 清掉上一轮连接的帧处理器：重连后会重新注册，避免同一个事件被处理多次。 */
+    resetHandlers(): void {
+        this.handlers = [];
+    }
+
     emit(frame: { meta: any; body?: Buffer }): void {
         for (const handler of this.handlers) {
             try {
@@ -53,6 +58,8 @@ class HostClient {
     /** 连接宿主并完成 hello 握手；返回宿主回报的会话摘要（可直接复用已登录会话）。 */
     attach(): Promise<any> {
         if (this.readyPromise) return this.readyPromise;
+        // 允许「先 detach 再 attach」：热重启前后的 worker 生命周期里会走到这条路径。
+        this.closing = false;
         this.readyPromise = new Promise((resolve, reject) => {
             this.readyResolve = resolve;
             this.readyReject = reject;
@@ -84,12 +91,21 @@ class HostClient {
         });
         socket.on('close', () => {
             this.connected = false;
-            if (this.closing) return;
-            if (attempt < MAX_RECONNECT_ATTEMPTS) {
-                setTimeout(() => this.openSocket(attempt + 1), RECONNECT_DELAY);
-            } else {
-                this.failReady(new Error('连接宿主不可用（重试次数已用尽）'));
+            if (this.closing) {
+                this.resetReady();
+                return;
             }
+            // 只有「握手还没完成」时才重试（宿主要么刚 fork 还没监听，要么正在重启）。
+            // 已经 attach 成功后再断，说明宿主进程没了：立即上报，由业务层走断线收尾，
+            // 否则会留下一个连不上宿主、却以为自己还在线的僵尸 worker。
+            const handshaking = !!this.readyReject;
+            if (handshaking && attempt < MAX_RECONNECT_ATTEMPTS) {
+                setTimeout(() => this.openSocket(attempt + 1), RECONNECT_DELAY);
+                return;
+            }
+            // failReady 内部会 resetReady()：先拒绝等待中的 attach，再清掉这一轮的 ready 状态。
+            this.emit({ meta: { t: 'link-error', message: '连接宿主已断开' } });
+            this.failReady(new Error('连接宿主已断开'));
         });
     }
 
@@ -97,7 +113,13 @@ class HostClient {
         const meta = frame.meta || {};
         if (meta.t === 'hello-ok') {
             this.helloInfo = meta;
-            this.readyResolve?.({ connected: !!meta.connected, session: meta.session || null });
+            const resolve = this.readyResolve;
+            this.readyResolve = null;
+            this.readyReject = null;
+            // readyPromise 保留：同一轮连接里重复 attach() 直接拿这份结果。
+            try {
+                resolve?.({ connected: !!meta.connected, session: meta.session || null, bufferedNotifies: meta.bufferedNotifies || 0 });
+            } catch {}
             return;
         }
         this.emit(frame);
@@ -119,8 +141,13 @@ class HostClient {
     }
 
     /** 登录成功后把会话参数交给宿主，由它启动心跳与 ACE。 */
-    sendSession(session: { gid: number; openId: string; clientVersion: string; heartbeatInterval?: number }): void {
+    sendSession(session: { gid: number; openId: string; clientVersion: string; heartbeatInterval?: number; state?: any }): void {
         this.send({ t: 'session', ...session });
+    }
+
+    /** 会话快照（昵称/等级/已解锁场景…）：宿主只缓存，worker 热重启时原样还回来。 */
+    updateSessionState(state: any): void {
+        this.send({ t: 'session-state', state: state && typeof state === 'object' ? state : null });
     }
 
     /** 请求宿主关闭网关连接（用户主动停号 / 重新登录时用）。 */
@@ -138,19 +165,23 @@ class HostClient {
         try { this.socket?.destroy(); } catch {}
         this.socket = null;
         this.connected = false;
+        this.resetReady();
     }
 
     close(): void {
-        this.closing = true;
-        try { this.socket?.destroy(); } catch {}
-        this.socket = null;
-        this.connected = false;
+        this.detach();
+    }
+
+    resetReady(): void {
+        this.readyPromise = null;
+        this.readyResolve = null;
+        this.readyReject = null;
     }
 
     failReady(error: Error): void {
-        this.readyReject?.(error);
-        this.readyResolve = null;
-        this.readyReject = null;
+        const reject = this.readyReject;
+        this.resetReady();
+        try { reject?.(error); } catch {}
     }
 }
 

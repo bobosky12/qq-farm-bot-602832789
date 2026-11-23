@@ -34,6 +34,16 @@ function shutdown(reason: string): void {
 
 process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
+// 主进程退出（热更新 / 被 kill）时 IPC 通道会断：这里只记一笔，**不退出**。
+// 连接与心跳继续跑，等新主进程起来后按 data/host-registry.json 重新 attach；
+// 若一直没人接管，HostServer 的看门狗会在闲置超时后自行回收。
+process.on('disconnect', () => {
+    console.warn('[host] 主进程已退出，连接与心跳继续保持，等待重新接管');
+});
+// 父进程控制台消失后 stdout 写入会抛 EPIPE，不能让它把宿主带崩。
+for (const stream of [process.stdout, process.stderr] as any[]) {
+    try { stream?.on?.('error', () => {}); } catch {}
+}
 process.on('uncaughtException', (error: any) => {
     console.error(`[host] 未捕获异常: ${error?.stack || error}`);
 });

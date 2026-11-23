@@ -205,6 +205,9 @@ QQ 扫码登录依赖外部的 [qq-miniapp-auth](https://github.com/liyangpengs/
 | `TZ` | `Asia/Shanghai` | Docker Compose | 容器时区 |
 | `NODE_ENV` | `production` | Docker | Compose 当前固定为生产环境 |
 | `LOG_LEVEL` | `info` | 后端 | 服务端日志级别 |
+| `FARM_SOCKET_HOST` | 空（关闭） | 源码 | 设为 `1` 时把 WS / 心跳 / 签名 / ACE 拆到每账号一个独立宿主进程，业务 worker 可热重启不掉线；详见 [连接宿主](socket-host.md) |
+| `FARM_HOST_IDLE_MS` | `900000` | 源码 | 宿主没有业务 worker 接管多久后自行退出（毫秒） |
+| `FARM_HOST_DEBUG` | 空 | 源码 | 设为 `1` 打印宿主入站信封（排查用，日志量大） |
 
 管理员不通过环境变量初始化：首次运行自动创建 `admin` / `admin`，之后的凭据保存在数据目录的 `admin.json` 中。面板只保留一个超级管理员，不提供注册、普通用户和租户隔离。
 

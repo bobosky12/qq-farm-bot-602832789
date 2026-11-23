@@ -3,6 +3,7 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { createScheduler } = require('../services/scheduler');
 const { isSocketHostEnabled, createHostToken, hostPipeName } = require('../host/naming');
+const { findLiveHost, upsertHostEntry, removeHostEntry, isProcessAlive } = require('../host/registry');
 // 账号维度的运行状态账本：面板据此显示「登录中 / 等待重登（倒计时）/ 停止中」。
 // 只在这里和 wx-keepalive 写，data-provider 读。
 const {
@@ -120,15 +121,26 @@ function createWorkerManager(options: WorkerManagerOptions) {
         }
     }
     const managerScheduler = createScheduler('worker_manager');
-    const useThreadRuntime = runtimeMode === 'thread' && !(processRef as any).pkg && typeof WorkerThread === 'function';
 
     // ==================== 连接宿主（socket host） ====================
     // 每个账号一个宿主进程：持有 WS / 心跳 / 上行加密 / ACE，业务 worker 可随时热重启。
     // 仅在 FARM_SOCKET_HOST=1 时启用；关闭时完全走原有直连，不影响现有部署。
-    const socketHostEnabled = isSocketHostEnabled(processRef.env || process.env);
+    // 打包版（pkg）不能用 fork 起宿主（execPath 会重跑主程序），直接保持直连。
+    const socketHostRequested = isSocketHostEnabled(processRef.env || process.env);
+    const socketHostEnabled = socketHostRequested && !(processRef as any).pkg;
+    // 宿主信息是「按进程的环境变量」注入的，线程之间共享 process.env，无法按账号隔离，
+    // 因此开启宿主时强制退回 fork 进程模型（也顺带把 worker 崩溃与主进程隔离开）。
+    const useThreadRuntime = runtimeMode === 'thread' && !(processRef as any).pkg
+        && typeof WorkerThread === 'function' && !socketHostEnabled;
+    if (socketHostRequested && !socketHostEnabled) {
+        log('系统', '打包版不支持连接宿主，账号将保持 worker 内直连');
+    } else if (socketHostRequested && !useThreadRuntime && runtimeMode === 'thread') {
+        log('系统', '连接宿主已启用：worker 改用 fork 进程模型（线程间无法按账号隔离管道令牌）');
+    }
+
     /** 停号后宿主保持连接一段时间（便于热重启复用），超时后回收进程。 */
     const HOST_IDLE_SHUTDOWN_MS = 10 * 60 * 1000;
-    const hosts: Record<string, { process: any; pipe: string; token: string }> = {};
+    const hosts: Record<string, { process: any; pipe: string; token: string; pid: number; adopted: boolean }> = {};
 
     function resolveHostEntry(): string {
         const base = path.join(__dirname, '..', 'host');
@@ -137,20 +149,38 @@ function createWorkerManager(options: WorkerManagerOptions) {
         return path.join(base, 'host-entry.ts');
     }
 
-    function ensureHostProcess(account: any): { process: any; pipe: string; token: string } | null {
+    function hostEntryAlive(entry: any): boolean {
+        if (!entry) return false;
+        if (entry.process) return entry.process.exitCode === null;
+        return isProcessAlive(entry.pid);
+    }
+
+    function ensureHostProcess(account: any): { process: any; pipe: string; token: string; pid: number; adopted: boolean } | null {
         if (!socketHostEnabled) return null;
         const id = String(account?.id || '');
         if (!id) return null;
         const existing = hosts[id];
-        if (existing && existing.process && existing.process.exitCode === null) {
+        if (hostEntryAlive(existing)) {
             managerScheduler.clear(`host_idle_${id}`);
             return existing;
         }
         const pipe = hostPipeName(id);
+        // 主进程重启（热更新）后优先接管上一个主进程留下的宿主：连接还在，会话不用重登。
+        const live = findLiveHost(id, pipe);
+        if (live) {
+            const adopted = { process: null, pipe: live.pipe, token: live.token, pid: live.pid, adopted: true };
+            hosts[id] = adopted;
+            managerScheduler.clear(`host_idle_${id}`);
+            log('系统', `已接管上一条连接宿主（pid=${live.pid}），游戏连接保持不断`, { accountId: id });
+            return adopted;
+        }
         const token = createHostToken();
         const scriptPath = resolveHostEntry();
         const forkOptions: any = {
-            stdio: ['inherit', 'inherit', 'inherit', 'ipc'],
+            stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
+            // 独立进程：主进程退出（热更新 / 崩溃）时宿主继续持有连接，新主进程按注册表接管。
+            detached: true,
+            windowsHide: true,
             env: {
                 ...(processRef.env || process.env),
                 FARM_HOST_ACCOUNT_ID: id,
@@ -166,11 +196,19 @@ function createWorkerManager(options: WorkerManagerOptions) {
             log('系统', `连接宿主启动失败，账号将回退为直连: ${error?.message || error}`, { accountId: id });
             return null;
         }
-        const entry = { process: child, pipe, token };
+        const pid = Number(child.pid) || 0;
+        const entry = { process: child, pipe, token, pid, adopted: false };
         hosts[id] = entry;
+        // 先落注册表：即使主进程马上重启，新主进程也能找到这条管道与令牌。
+        upsertHostEntry({ accountId: id, pipe, token, pid, startedAt: Date.now() });
+        try { child.unref(); } catch {}
+        try { (child as any).channel?.unref?.(); } catch {}
         child.on('exit', (code: number) => {
             log('系统', `连接宿主退出 (code=${code})`, { accountId: id });
-            if (hosts[id]?.process === child) delete hosts[id];
+            if (hosts[id]?.process === child) {
+                removeHostEntry(id, pid);
+                delete hosts[id];
+            }
         });
         child.on('error', (error: any) => {
             log('系统', `连接宿主异常: ${error?.message || error}`, { accountId: id });
@@ -194,17 +232,25 @@ function createWorkerManager(options: WorkerManagerOptions) {
             if (workers[accountId]) return;
             const host = hosts[accountId];
             if (!host) return;
-            try { host.process.kill(); } catch {}
-            delete hosts[accountId];
+            killHost(accountId, host);
             log('系统', '连接宿主闲置回收', { accountId });
         });
+    }
+
+    /** 杀掉宿主（无论是本进程 fork 的还是上一任主进程留下的）。 */
+    function killHost(accountId: string, host: { process: any; pid: number }): void {
+        try {
+            if (host.process) host.process.kill();
+            else if (host.pid) process.kill(host.pid);
+        } catch {}
+        removeHostEntry(accountId, host.pid);
+        delete hosts[accountId];
     }
 
     /** 主进程退出时统一收尾，避免留下孤儿宿主进程。 */
     function stopAllHosts(): void {
         for (const id of Object.keys(hosts)) {
-            try { hosts[id].process.kill(); } catch {}
-            delete hosts[id];
+            killHost(id, hosts[id]);
         }
     }
 

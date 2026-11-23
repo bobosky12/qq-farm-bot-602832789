@@ -1217,10 +1217,16 @@ async function sendLogin(context: ConnectionContext, onLoginSuccess?: () => void
                         openId: userState.openId,
                         clientVersion: context.clientVersion,
                         heartbeatInterval: CONFIG.heartbeatInterval,
+                        // 会话快照：热重启后新 worker 不必重新登录也能还原昵称/等级/场景。
+                        state: buildHostSessionSnapshot(),
                     });
                 } catch (error: any) {
                     logWarn('系统', `同步会话到宿主失败: ${error?.message || error}`);
                 }
+                startHostStateSync(context);
+                // 心跳仍由 worker 驱动：网关对 client_seq 的连续性敏感，
+                // worker 在线时就让它按自己的序号发；只有 worker 不在（热重启窗口）宿主才接管。
+                startHeartbeat(context);
             } else {
                 startAceRuntime((service: string, method: string, body: Buffer, timeoutMs?: number) => (
                     sendMsgAsync(service, method, body, { timeoutMs, priority: 'high', criticalLane: 'ace' })
@@ -1366,6 +1372,7 @@ function clearNetworkRuntime(reason: string): void {
     stopAceRuntime(true);
     gatewayTokens.clear();
     invalidateLandForecast();
+    stopHostStateSync();
     networkEvents.emit('landsDirty', 'runtime_reset');
     userState.gid = 0;
     userState.openId = '';
@@ -1437,12 +1444,95 @@ function finalizeConnection(context: ConnectionContext, details: DisconnectDetai
 //   - 业务 proto / 调度 / 配置 / 数据 / UI 的变更不再导致掉线。
 // 关闭（默认）时保持原有「worker 内直连」行为，完全不改现有部署。
 
-const hostState: { client: any; adapter: HostSocketAdapter | null; session: any } = { client: null, adapter: null, session: null };
+const hostState: {
+    client: any;
+    adapter: HostSocketAdapter | null;
+    session: any;
+    stateTimer: any;
+    lastStateJson: string;
+} = { client: null, adapter: null, session: null, stateTimer: null, lastStateJson: '' };
 
 function isHostTransportEnabled(): boolean {
     return String(process.env.FARM_SOCKET_HOST || '') === '1'
         && !!String(process.env.FARM_HOST_PIPE || '')
         && !!String(process.env.FARM_HOST_TOKEN || '');
+}
+
+/** 会话快照：宿主只存不解析，worker 热重启时原样回填，避免「记得住 gid、忘了昵称/场景」。 */
+function buildHostSessionSnapshot(): any {
+    return {
+        name: userState.name,
+        level: userState.level,
+        gold: userState.gold,
+        exp: userState.exp,
+        coupon: userState.coupon,
+        goldBean: userState.goldBean,
+        avatarUrl: userState.avatarUrl,
+        globalSceneId: userState.globalSceneId,
+        unlockedSceneIds: Array.isArray(userState.unlockedSceneIds) ? [...userState.unlockedSceneIds] : [],
+        serverTime: getServerTimeSec() * 1000,
+        at: Date.now(),
+    };
+}
+
+/** 把宿主回报的会话快照回填到 userState：字段缺失时保持默认值，不能把 0 当权威。 */
+function applyHostSession(session: any): void {
+    if (!session) return;
+    const gid = toNum(session.gid);
+    if (gid > 0) userState.gid = gid;
+    if (session.openId) userState.openId = String(session.openId);
+    const state = session.state;
+    if (!state || typeof state !== 'object') return;
+    if (state.name) userState.name = String(state.name);
+    if (toNum(state.level) > 0) userState.level = toNum(state.level);
+    if (Number.isFinite(Number(state.gold))) userState.gold = toNum(state.gold);
+    if (Number.isFinite(Number(state.exp))) userState.exp = toNum(state.exp);
+    if (Number.isFinite(Number(state.coupon))) userState.coupon = toNum(state.coupon);
+    if (Number.isFinite(Number(state.goldBean))) userState.goldBean = toNum(state.goldBean);
+    if (state.avatarUrl) userState.avatarUrl = String(state.avatarUrl);
+    if (toNum(state.globalSceneId) > 0) userState.globalSceneId = toNum(state.globalSceneId);
+    if (Array.isArray(state.unlockedSceneIds) && state.unlockedSceneIds.length) {
+        const scenes: number[] = [];
+        for (const raw of state.unlockedSceneIds as any[]) {
+            const id = toNum(raw);
+            if (id > 0 && !scenes.includes(id)) scenes.push(id);
+        }
+        if (scenes.length) userState.unlockedSceneIds = scenes;
+    }
+    if (toNum(state.serverTime) > 0) syncServerTime(toNum(state.serverTime));
+    if (userState.name) {
+        updateStatusFromLogin({
+            name: userState.name,
+            level: userState.level,
+            gold: userState.gold,
+            exp: userState.exp,
+            avatarUrl: userState.avatarUrl,
+        });
+    }
+}
+
+/** 定期把 userState 的变化推给宿主：等级/场景解锁变化后，热重启回填的就不是旧值。 */
+function startHostStateSync(context: ConnectionContext): void {
+    stopHostStateSync();
+    const push = (): void => {
+        if (!isCurrentConnection(context) || !hostState.client) return;
+        try {
+            const snapshot = buildHostSessionSnapshot();
+            const json = JSON.stringify({ ...snapshot, at: 0 });
+            if (json === hostState.lastStateJson) return;
+            hostState.lastStateJson = json;
+            hostState.client.updateSessionState(snapshot);
+        } catch {}
+    };
+    push();
+    hostState.stateTimer = setInterval(push, 30000);
+    hostState.stateTimer.unref?.();
+}
+
+function stopHostStateSync(): void {
+    if (hostState.stateTimer) clearInterval(hostState.stateTimer);
+    hostState.stateTimer = null;
+    hostState.lastStateJson = '';
 }
 
 /**
@@ -1488,7 +1578,9 @@ class HostSocketAdapter {
 
     terminate(): void {
         this.readyState = 3;
-        try { hostState.client?.close(); } catch {}
+        // 只关管道会把网关连接留成孤儿：先让宿主关掉游戏连接，再断开管道。
+        try { hostState.client?.requestGatewayClose(); } catch {}
+        try { hostState.client?.detach(); } catch {}
         this.emit('close', 0, 'terminated');
     }
 
@@ -1543,7 +1635,23 @@ function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
         }
         case 'notify': {
             // body 是 EventMessage 字节：事件类型随业务演进，解码留在 worker。
+            // replay=true 表示这是 worker 离线期间宿主缓存下来的事件（热重启补发）。
             handleNotify({ body: frame.body || Buffer.alloc(0) });
+            return;
+        }
+        case 'notify-gap': {
+            const dropped = toNum(meta.dropped);
+            if (dropped > 0) {
+                logWarn('推送', `worker 离线期间有 ${dropped} 条推送被丢弃，触发一次全量校正`);
+                networkEvents.emit('notifyGap', { dropped, at: Date.now() });
+            }
+            return;
+        }
+        case 'link-error': {
+            if (!context) return;
+            logWarn('系统', `与连接宿主的通道断开：${String(meta.message || '')}`);
+            finalizeConnection(context, { source: 'host_link_lost', reason: String(meta.message || '连接宿主已断开') });
+            adapter?.emit('close', 1006, 'host_link_lost');
             return;
         }
         case 'server-time': {
@@ -1589,8 +1697,6 @@ function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
  * 宿主只负责实际握手 + 后续心跳/加密。
  */
 async function connectViaHost(code: string | null, onLoginSuccess?: () => void | Promise<void>): Promise<void> {
-    const authCode = String(code || '').trim();
-    if (!authCode) throw new Error('连接缺少一次性 Code');
     if (currentConnection && !currentConnection.finalized) throw new Error('WebSocket 连接已存在');
 
     clientSeq = 1;
@@ -1605,7 +1711,7 @@ async function connectViaHost(code: string | null, onLoginSuccess?: () => void |
         platform: isWechatPlatform() ? 'wx' : CONFIG.platform,
         os: CONFIG.os,
         ver: clientVersion,
-        code: authCode,
+        code: String(code || '').trim(),
     }).toString();
     const di = CONFIG.deviceInfo || {};
     const headers = {
@@ -1613,7 +1719,9 @@ async function connectViaHost(code: string | null, onLoginSuccess?: () => void |
         'Origin': 'https://gate-obt.nqf.qq.com',
     };
 
-    let attached: { connected: boolean; session: any } = { connected: false, session: null };
+    // 先 attach 再判断 Code：热重启时宿主已经有一条登录好的连接，
+    // 这时手头的 Code 早就过期（甚至为空），不需要也不能再登录一次。
+    let attached: { connected: boolean; session: any; bufferedNotifies?: number } = { connected: false, session: null };
     try {
         attached = await attachHostClient();
     } catch (error: any) {
@@ -1639,6 +1747,7 @@ async function connectViaHost(code: string | null, onLoginSuccess?: () => void |
     hostState.adapter = adapter;
     hostState.session = attached.session;
 
+    hostState.client.resetHandlers();
     hostState.client.onFrame((frame: any) => {
         if (!isCurrentConnection(context)) return;
         handleHostFrame(frame);
@@ -1646,14 +1755,13 @@ async function connectViaHost(code: string | null, onLoginSuccess?: () => void |
 
     // 宿主已有存活连接（worker 热重启）：直接复用会话，不重发 PlayerLogin。
     if (attached.connected && attached.session?.gid) {
-        const session = attached.session;
+        applyHostSession(attached.session);
         adapter.readyState = 1;
-        userState.gid = toNum(session.gid);
-        if (session.openId) userState.openId = String(session.openId);
         context.phase = 'online';
         context.onlineMono = performance.now();
         context.loginInitialized = true;
-        log('系统', `已复用宿主存活连接（gid=${session.gid}），无需重新登录`);
+        log('系统', `已复用宿主存活连接（gid=${attached.session.gid}${userState.name ? `，${userState.name}` : ''}），无需重新登录`);
+        startHostStateSync(context);
         try {
             await onLoginSuccess?.();
         } catch (error: any) {
@@ -1661,6 +1769,26 @@ async function connectViaHost(code: string | null, onLoginSuccess?: () => void |
         }
         return;
     }
+
+    const authCode = String(code || '').trim();
+    if (!authCode) throw new Error('连接缺少一次性 Code（宿主没有可复用的存活会话）');
+
+    // 网关打开后仍由 worker 发 PlayerLogin：登录是业务协议，不能塞进只做传输的宿主。
+    adapter.on('open', () => {
+        if (!isCurrentConnection(context) || context.phase !== 'connecting') return;
+        context.phase = 'login';
+        networkScheduler.setTimeoutTask('login_timeout', 20000, () => {
+            if (!isCurrentConnection(context) || context.phase !== 'login') return;
+            logWarn('登录', '登录响应超时，账号将停止运行...');
+            finalizeConnection(context, { source: 'login_timeout', reason: '登录响应超时' });
+            try { (context.socket as any).terminate(); } catch {}
+        });
+        sendLogin(context, onLoginSuccess).catch((e: any) => {
+            if (!isCurrentConnection(context)) return;
+            finalizeConnection(context, { source: 'login_send_failed', reason: e.message });
+            try { (context.socket as any).terminate(); } catch {}
+        });
+    });
 
     hostState.client.connectGateway(url.toString(), headers);
 }
