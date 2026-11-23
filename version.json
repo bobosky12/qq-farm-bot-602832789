@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 2,
-  "build": 232,
-  "version": "3.35.2",
-  "updatedAt": "2026-11-23T13:31:14.597Z",
+  "patch": 3,
+  "build": 233,
+  "version": "3.35.3",
+  "updatedAt": "2026-11-23T14:06:47.425Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.3",
+      "build": 233,
+      "date": "2026-11-23",
+      "summary": "日志滚动、号池导入与今日统计修正",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.2",
       "build": 232,

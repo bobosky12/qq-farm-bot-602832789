@@ -58,8 +58,10 @@ async function importCodes() {
   try {
     const { data } = await api.post('/api/friends/pool/import', { text: shareText.value })
     if (data?.ok) {
-      result.value = `已导入 ${data.data.added} 条、更新 ${data.data.updated} 条（识别 ${data.data.parsed} 条分享链接）`
-      shareText.value = ''
+      result.value = data.data.parsed > 0
+        ? `已导入 ${data.data.added} 条、更新 ${data.data.updated} 条（识别 ${data.data.parsed} 条分享卡片）`
+        : '未识别到有效卡片：必须带 uid 与 openid。可粘贴采集器 JSON 或形如 ?uid=...&openid=...&share_key=... 的链接，每行一条。'
+      if (data.data.parsed > 0) shareText.value = ''
       await loadPool()
     }
   } finally {
@@ -117,7 +119,7 @@ onMounted(loadPool)
     <section class="farm-card rounded-lg p-4 space-y-3">
       <h4 class="text-sm text-gray-700 font-medium dark:text-gray-300">导入分享卡片</h4>
       <p class="text-xs text-gray-500 dark:text-gray-400">
-        每行一条分享链接或 <code>?uid=...&openid=...&share_key=...</code>；带 share_key 的卡片才能走「进入农场 → 拿申请令牌 → 发好友申请」完整链路。
+        支持采集器导出的 JSON（<code>{"data":[{"uid","openid","shareKey"}]}</code>）或每行一条 <code>?uid=...&openid=...&share_key=...</code> 链接；<b>uid 与 openid 必填</b>，带 share_key 才能走「进入农场 → 拿申请令牌 → 发好友申请」完整链路。
       </p>
       <textarea
         v-model="shareText"

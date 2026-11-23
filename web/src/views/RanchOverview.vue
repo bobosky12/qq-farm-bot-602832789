@@ -150,6 +150,7 @@ const todayKey = computed(() => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 })
 
+const todayExpGained = computed(() => Math.max(0, Number(status.value?.sessionExpGained) || 0))
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
 const operationEntries = computed(() => Object.entries(todayOperations.value).filter(([, count]) => Number(count) > 0))
 
@@ -179,7 +180,8 @@ const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, labe
     label,
     image: '',
     icon,
-    value: formatCount(Math.abs(delta)),
+    // 数值不带千分位逗号：和今日统计里的动作次数保持同一视觉口径。
+    value: String(Math.abs(delta)),
     title: `今日变动 ${delta >= 0 ? '+' : '-'}${formatCount(Math.abs(delta))}，当前 ${formatCount(current)}`,
   }
 }))
@@ -204,7 +206,16 @@ const otherActionTiles = computed(() => operationEntries.value
     title: ranchActionLabels[key] || key,
   })))
 
-const todayTiles = computed(() => [...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value])
+const expTile = computed(() => ({
+  key: 'today-exp',
+  label: '经验',
+  image: '',
+  icon: 'i-carbon-star-filled',
+  value: String(todayExpGained.value),
+  title: `今日获得经验 ${formatCount(todayExpGained.value)}`,
+}))
+
+const todayTiles = computed(() => [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value])
 const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.value !== '0').length)
 </script>
 

@@ -194,6 +194,7 @@ watch(hasActiveLogFilter, (enabled) => {
 })
 
 function onLogScroll(e: Event) {
+  if (programmaticScroll) return
   const el = e.target as HTMLElement
   if (!el)
     return
@@ -225,34 +226,40 @@ async function clearLogs() {
 }
 
 let logScrollFrame: number | undefined
+/** 程序化滚动期间忽略 scroll 事件，否则 content-visibility 的估算高度会触发「用户上滑」误判。 */
+let programmaticScroll = false
 
-function scheduleLogScroll(force = false) {
-  nextTick(() => {
-    if (!logContainer.value || (!force && !autoScroll.value) || logScrollFrame !== undefined)
-      return
-    logScrollFrame = window.requestAnimationFrame(() => {
-      if (logContainer.value)
-        logContainer.value.scrollTop = logContainer.value.scrollHeight
-      logScrollFrame = undefined
-    })
+function stickToBottom(): void {
+  const el = logContainer.value
+  if (!el) return
+  programmaticScroll = true
+  el.scrollTop = el.scrollHeight
+  // 行内容展开后真实高度可能变化，下一帧再钉一次（最多两次，避免无限递归）。
+  logScrollFrame = window.requestAnimationFrame(() => {
+    if (logContainer.value) logContainer.value.scrollTop = logContainer.value.scrollHeight
+    programmaticScroll = false
+    logScrollFrame = undefined
   })
 }
 
-watch(allLogs, () => {
-  scheduleLogScroll()
-})
+function scheduleLogScroll(force = false) {
+  if (logScrollFrame !== undefined) return
+  nextTick(() => {
+    if (!logContainer.value || (!force && !autoScroll.value)) return
+    logScrollFrame = window.requestAnimationFrame(stickToBottom)
+  })
+}
+
+watch(allLogs, () => { scheduleLogScroll() })
 
 function scrollToBottom() {
   scheduleLogScroll(true)
-  // 容器尺寸可能晚于数据就绪（手机端卡片在首屏外、图标/字体后到、外层布局重排），
-  // 首次滚动常常滚了个寂寞。短促重试几次：只有「确实没到底」且用户没有主动上滑时才补滚。
+  // 容器尺寸可能晚于数据就绪（首屏外、字体后到、外层重排），多次补钉直到真的到底。
   for (const delay of [120, 320, 700, 1200]) {
     window.setTimeout(() => {
       const el = logContainer.value
-      if (!el || !autoScroll.value)
-        return
-      if (el.scrollHeight - el.scrollTop - el.clientHeight > 2)
-        scheduleLogScroll(true)
+      if (!el || !autoScroll.value || programmaticScroll) return
+      if (el.scrollHeight - el.scrollTop - el.clientHeight > 2) scheduleLogScroll(true)
     }, delay)
   }
 }
@@ -425,8 +432,6 @@ useIntervalFn(loadLogs, 10000)
   padding: 5px 8px 5px 10px;
   border-left: 3px solid transparent;
   border-radius: 6px;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 28px;
 }
 
 .log-row + .log-row {

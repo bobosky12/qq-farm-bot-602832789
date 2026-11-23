@@ -506,22 +506,44 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
     });
 
     app.post('/api/friends/pool/import', (req: Request, res: Response) => {
-        const text = String((req.body || {}).text || '');
-        const lines = text.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+        const raw = String((req.body || {}).text || '').trim();
         const items: any[] = [];
-        for (const line of lines) {
-            const raw = line.startsWith('?') ? line.slice(1) : line;
-            const params = new URLSearchParams(raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : raw);
-            const uid = params.get('uid');
-            const openid = params.get('openid');
-            if (!uid || !openid) continue;
-            items.push({
+        const normalize = (item: any): any => {
+            if (!item || typeof item !== 'object') return null;
+            const uid = String(item.uid || item.gid || '').trim();
+            const openid = String(item.openid || item.openId || '').trim();
+            if (!uid || !openid) return null;
+            return {
                 uid, openid,
-                shareSource: params.get('share_source') || '',
-                docId: params.get('doc_id') || '',
-                shareKey: params.get('share_key') || '',
-                cardTime: params.get('card_time') || '',
-            });
+                shareSource: String(item.shareSource ?? item.share_source ?? ''),
+                docId: String(item.docId ?? item.doc_id ?? ''),
+                shareKey: String(item.shareKey ?? item.share_key ?? '').trim(),
+                cardTime: String(item.cardTime ?? item.card_time ?? item.at ?? ''),
+            };
+        };
+        // 兼容采集器导出的 JSON（{ data:[...] } 或直接数组）与逐行分享链接两种格式。
+        if (raw.startsWith('{') || raw.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(raw);
+                const entries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.data) ? parsed.data : []);
+                for (const entry of entries) {
+                    const item = normalize(entry);
+                    if (item) items.push(item);
+                }
+            } catch {
+                return res.status(400).json({ ok: false, error: 'JSON 解析失败，请检查粘贴内容' });
+            }
+        } else {
+            for (const line of raw.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean)) {
+                const query = line.startsWith('?') ? line.slice(1) : line;
+                const params = new URLSearchParams(query.includes('?') ? query.slice(query.indexOf('?') + 1) : query);
+                const item = normalize({
+                    uid: params.get('uid'), openid: params.get('openid'),
+                    shareSource: params.get('share_source'), docId: params.get('doc_id'),
+                    shareKey: params.get('share_key'), cardTime: params.get('card_time'),
+                });
+                if (item) items.push(item);
+            }
         }
         try {
             const result = items.length
