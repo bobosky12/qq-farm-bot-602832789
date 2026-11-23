@@ -30,13 +30,15 @@ const accountStore = useAccountStore()
 const userStore = useUserStore()
 const settingStore = useSettingStore()
 
-type SettingsTab = 'account' | 'account-config' | 'notification' | 'system-settings' | 'system'
-const settingsTabKeys: SettingsTab[] = ['account', 'account-config', 'notification', 'system-settings', 'system']
+type SettingsTab = 'account' | 'farm-config' | 'ranch-config' | 'activity-config' | 'notification' | 'system-settings' | 'system'
+const settingsTabKeys: SettingsTab[] = ['account', 'farm-config', 'ranch-config', 'activity-config', 'notification', 'system-settings', 'system']
 // 旧标签仍可能出现在收藏夹或外部链接里，统一折到新分类上。
 const LEGACY_TAB_ALIAS: Record<string, SettingsTab> = {
-  'strategy': 'account-config',
-  'automation': 'account-config',
-  'default-plan': 'account-config',
+  'strategy': 'farm-config',
+  'automation': 'farm-config',
+  'default-plan': 'farm-config',
+  // 账号设置拆成三页后，旧地址与旧缓存都落到农场设置。
+  'account-config': 'farm-config',
   'user': 'notification',
   'capture': 'system',
 }
@@ -69,7 +71,9 @@ watch(() => route.query.tab, (value) => {
 
 const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-settings' },
-  { key: 'account-config', label: '账号设置', icon: 'i-carbon-settings-adjust' },
+  { key: 'farm-config', label: '农场设置', icon: 'i-carbon-sprout' },
+  { key: 'ranch-config', label: '牧场设置', icon: 'i-fas-paw' },
+  { key: 'activity-config', label: '活动设置', icon: 'i-carbon-events' },
   { key: 'notification', label: '通知设置', icon: 'i-carbon-notification' },
   { key: 'system-settings', label: '全局设置', icon: 'i-carbon-settings' },
   { key: 'system', label: '连接与设备', icon: 'i-carbon-settings-services' },
@@ -110,7 +114,7 @@ const currentAccountName = computed(() => {
 function openAccountSettings(account: any) {
   if (account?.id)
     accountStore.selectAccount(String(account.id))
-  activeTab.value = 'account-config'
+  activeTab.value = 'farm-config'
 }
 
 onMounted(async () => {
@@ -904,8 +908,8 @@ async function handleResetSystemConfig() {
         <!-- 账号管理 -->
         <AccountManagementPanel v-if="activeTab === 'account'" @open-settings="openAccountSettings" />
 
-        <!-- 账号设置（六个功能模块） -->
-        <div v-else-if="activeTab === 'account-config'" class="space-y-4">
+        <!-- 农场设置：原「账号设置」的农场模块（种植/土地/好友/偷菜/商人/日常） -->
+        <div v-else-if="activeTab === 'farm-config'" class="space-y-4">
           <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
             <span class="i-carbon-circle-dash mx-auto mb-2 inline-block animate-spin text-2xl" />
             <p>加载中...</p>
@@ -913,11 +917,70 @@ async function handleResetSystemConfig() {
 
           <div v-else-if="!currentAccountId || loadedAccountId !== currentAccountId" class="py-8 text-center text-gray-500">
             <div class="i-carbon-settings mx-auto mb-2 text-3xl text-gray-400" />
-            <p>{{ currentAccountId ? '账号设置加载失败，请切换账号或刷新页面重试' : '请先选择账号' }}</p>
+            <p>{{ currentAccountId ? '农场设置加载失败，请切换账号或刷新页面重试' : '请先选择账号' }}</p>
           </div>
 
           <AccountFeatureSettings
             v-else
+            group="farm"
+            v-model:strategy="localStrategySettings"
+            v-model:automation="localAutomationSettings"
+            :current-account-name="currentAccountName"
+            :current-account-id="currentAccountId"
+            :loading="settingsLoading"
+            :saving="automationSaving"
+            :planting-strategy-options="plantingStrategyOptions"
+            :bag-fallback-strategy-options="BAG_FALLBACK_STRATEGY_OPTIONS"
+            :fertilizer-land-type-options="fertilizerLandTypeOptions"
+            :fertilizer-options="fertilizerOptions"
+            @save="onFeatureModuleSave"
+          />
+        </div>
+
+        <!-- 牧场设置：原「账号设置」的牧场模块（养殖/饲料/好友/偷取/集市/日常） -->
+        <div v-else-if="activeTab === 'ranch-config'" class="space-y-4">
+          <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
+            <span class="i-carbon-circle-dash mx-auto mb-2 inline-block animate-spin text-2xl" />
+            <p>加载中...</p>
+          </div>
+
+          <div v-else-if="!currentAccountId || loadedAccountId !== currentAccountId" class="py-8 text-center text-gray-500">
+            <div class="i-carbon-settings mx-auto mb-2 text-3xl text-gray-400" />
+            <p>{{ currentAccountId ? '牧场设置加载失败，请切换账号或刷新页面重试' : '请先选择账号' }}</p>
+          </div>
+
+          <AccountFeatureSettings
+            v-else
+            group="ranch"
+            v-model:strategy="localStrategySettings"
+            v-model:automation="localAutomationSettings"
+            :current-account-name="currentAccountName"
+            :current-account-id="currentAccountId"
+            :loading="settingsLoading"
+            :saving="automationSaving"
+            :planting-strategy-options="plantingStrategyOptions"
+            :bag-fallback-strategy-options="BAG_FALLBACK_STRATEGY_OPTIONS"
+            :fertilizer-land-type-options="fertilizerLandTypeOptions"
+            :fertilizer-options="fertilizerOptions"
+            @save="onFeatureModuleSave"
+          />
+        </div>
+
+        <!-- 活动设置：原「账号设置」的活动模块（节令小札/牧歌初启/奶茶/快乐不独享） -->
+        <div v-else-if="activeTab === 'activity-config'" class="space-y-4">
+          <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
+            <span class="i-carbon-circle-dash mx-auto mb-2 inline-block animate-spin text-2xl" />
+            <p>加载中...</p>
+          </div>
+
+          <div v-else-if="!currentAccountId || loadedAccountId !== currentAccountId" class="py-8 text-center text-gray-500">
+            <div class="i-carbon-settings mx-auto mb-2 text-3xl text-gray-400" />
+            <p>{{ currentAccountId ? '活动设置加载失败，请切换账号或刷新页面重试' : '请先选择账号' }}</p>
+          </div>
+
+          <AccountFeatureSettings
+            v-else
+            group="events"
             v-model:strategy="localStrategySettings"
             v-model:automation="localAutomationSettings"
             :current-account-name="currentAccountName"

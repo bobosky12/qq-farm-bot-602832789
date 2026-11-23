@@ -14,9 +14,17 @@ const { writeJsonFileAtomic } = require('../json-db');
  * 计数只是给人看的运营数据，不是结算依据。
  */
 
+interface CurrencyDay {
+    /** 当天首次观测到的余额：今日增减以此为基准。 */
+    baseline: number;
+    current: number;
+}
+
 interface DailyStats {
     date: string;
     actions: Record<string, number>;
+    /** 金券 1007 / 松果 1008 / 便便 7002 的当日基线与最新余额。 */
+    currencies?: Record<string, CurrencyDay>;
 }
 
 function accountId(): string {
@@ -37,13 +45,17 @@ function fileFor(id: string): string {
 }
 
 function read(id: string): DailyStats {
-    const empty: DailyStats = { date: dateKey(), actions: {} };
+    const empty: DailyStats = { date: dateKey(), actions: {}, currencies: {} };
     if (!id) return empty;
     try {
         const data = JSON.parse(fs.readFileSync(fileFor(id), 'utf8'));
         if (!data || typeof data !== 'object' || data.date !== dateKey() || typeof data.actions !== 'object')
             return empty;
-        return { date: data.date, actions: { ...data.actions } };
+        return {
+            date: data.date,
+            actions: { ...data.actions },
+            currencies: data.currencies && typeof data.currencies === 'object' ? { ...data.currencies } : {},
+        };
     }
     catch {
         return empty;
@@ -64,9 +76,42 @@ function recordAction(action: string): void {
     }
 }
 
-/** 今日统计快照：{ date, actions }，当天没有记录时 actions 为空对象。 */
+/** 内存里的最近一次余额指纹：没变就不写盘，避免每次拉快照都磨盘。 */
+let lastCurrencyFingerprint = '';
+
+/**
+ * 记录资源余额（金券 1007 / 松果 1008 / 便便 7002）：
+ * 当天第一次观测作为基线，之后每次快照更新最新值；
+ * 概览页的「今日统计」用 current - baseline 展示今日增减。
+ */
+function recordCurrencies(balances: Record<string, number>): void {
+    const id = accountId();
+    if (!id) return;
+    const entries = Object.entries(balances)
+        .map(([key, value]) => [String(key), Number(value) || 0] as const)
+        .filter(([, value]) => Number.isFinite(value));
+    if (!entries.length) return;
+    const fingerprint = entries.map(([key, value]) => `${key}:${value}`).join('|');
+    if (fingerprint === lastCurrencyFingerprint) return;
+    const data = read(id);
+    data.currencies = data.currencies || {};
+    for (const [key, value] of entries) {
+        const day = data.currencies[key] || { baseline: value, current: value };
+        day.current = value;
+        data.currencies[key] = day;
+    }
+    try {
+        writeJsonFileAtomic(fileFor(id), data);
+        lastCurrencyFingerprint = fingerprint;
+    }
+    catch {
+        // 统计失败不影响主流程
+    }
+}
+
+/** 今日统计快照：{ date, actions, currencies }，当天没有记录时都是空对象。 */
 function getToday(): DailyStats {
     return read(accountId());
 }
 
-module.exports = { recordAction, getToday };
+module.exports = { recordAction, recordCurrencies, getToday };

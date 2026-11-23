@@ -42,6 +42,8 @@ const props = defineProps<{
   bagFallbackStrategyOptions: any[]
   fertilizerLandTypeOptions: any[]
   fertilizerOptions: any[]
+  /** 只展示某一组模块：账号设置拆成农场/牧场/活动三个页后按页传入；'all' 保持原来的三组全展示。 */
+  group?: 'all' | 'farm' | 'ranch' | 'events'
 }>()
 
 const emit = defineEmits<{
@@ -116,18 +118,39 @@ const activeRanchSwitches = computed(() => {
 
 /**
  * 功能模块分三大类（参考 BUGDey 版的排序与分类）：
- * 农场 → 牧场 → 活动。分类只影响展示顺序，开关与弹窗逻辑保持原样。
+ * 农场 → 牧场 → 活动。分类只影响展示顺序，开关与弹窗逻辑保持原样；
+ * 账号设置拆页后，农场/牧场/活动三个设置页各自只传自己的 group。
  */
-const MODULE_GROUPS: Array<{ key: string, label: string, icon: string, description: string, modules: ModuleKey[] }> = [
+const MODULE_GROUPS: Array<{ key: 'farm' | 'ranch' | 'events', label: string, icon: string, description: string, modules: ModuleKey[] }> = [
   { key: 'farm', label: '农场', icon: 'i-carbon-sprout', description: '种植、土地、好友互动、神秘商人与日常', modules: ['planting', 'fertilizer', 'friends', 'steal', 'merchant', 'daily'] },
   { key: 'ranch', label: '牧场', icon: 'i-fas-paw', description: '养殖、饲料、好友、偷取、集市与日常', modules: ['ranch_husbandry', 'ranch_feed', 'ranch_friends', 'ranch_steal', 'ranch_merchant', 'ranch_daily'] },
   { key: 'events', label: '活动', icon: 'i-carbon-events', description: '节令与限时活动的自动任务和奖励', modules: ['events'] },
 ]
 
-const moduleGroups = computed(() => MODULE_GROUPS.map(group => ({
-  ...group,
-  items: group.modules.filter(key => moduleInfo[key]).map(key => ({ key, info: moduleInfo[key]! })),
-})).filter(group => group.items.length > 0))
+/** 当前页要展示的模块全集：拆页后按 group 过滤，'all' 保持原样。 */
+const scopedGroupKeys = computed(() => {
+  const group = props.group || 'all'
+  return group === 'all' ? MODULE_GROUPS.map(item => item.key) : [group]
+})
+
+const scopedModuleKeys = computed(() => {
+  const keys = scopedGroupKeys.value.flatMap(groupKey =>
+    MODULE_GROUPS.find(item => item.key === groupKey)?.modules || [])
+  return keys.filter(key => moduleInfo[key])
+})
+
+const scopedGroupLabel = computed(() => {
+  const group = props.group || 'all'
+  if (group === 'all') return '农场自动配置'
+  return MODULE_GROUPS.find(item => item.key === group)?.label || ''
+})
+
+const moduleGroups = computed(() => MODULE_GROUPS
+  .filter(group => scopedGroupKeys.value.includes(group.key))
+  .map(group => ({
+    ...group,
+    items: group.modules.filter(key => moduleInfo[key]).map(key => ({ key, info: moduleInfo[key]! })),
+  })).filter(group => group.items.length > 0))
 const fertilizerName = computed(() => props.fertilizerOptions.find(item => item.value === automation.value.automation.fertilizer)?.label || '未设置')
 const selectedLandNames = computed(() => props.fertilizerLandTypeOptions.filter(item => automation.value.automation.fertilizer_land_types?.includes(item.value)).map(item => item.label))
 const selectedLandTypeCount = computed(() => Array.isArray(automation.value.automation.fertilizer_land_types) ? automation.value.automation.fertilizer_land_types.length : 0)
@@ -375,14 +398,14 @@ function cancel() {
     </div>
     <template v-else>
       <div class="flex flex-wrap items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-        <span class="text-gray-700 font-medium dark:text-gray-300">农场自动配置</span>
+        <span class="text-gray-700 font-medium dark:text-gray-300">{{ scopedGroupLabel }}自动配置</span>
         <span class="h-1 w-1 rounded-full bg-gray-300 dark:bg-gray-600" />
         <span>{{ currentAccountName ? `正在配置：${currentAccountName}` : '请先在账号管理中选择账号' }}</span>
-        <span class="ml-auto text-xs">已开启 {{ Object.keys(moduleInfo).filter(key => moduleEnabled(key as ModuleKey)).length }} / {{ Object.keys(moduleInfo).length }} 项</span>
+        <span class="ml-auto text-xs">已开启 {{ scopedModuleKeys.filter(key => moduleEnabled(key as ModuleKey)).length }} / {{ scopedModuleKeys.length }} 项</span>
       </div>
 
       <div v-for="group in moduleGroups" :key="group.key" class="space-y-3">
-        <div class="flex flex-wrap items-center gap-3">
+        <div v-if="(props.group || 'all') === 'all'" class="flex flex-wrap items-center gap-3">
           <!-- 渐变底不能走 bg-[var(--theme-gradient)]：UnoCSS 会编译成 background-color，对 gradient 值无效，白图标会落在白底上看不见。
                尺寸与右侧标题文字齐平（容器 = text-sm 行高 20px，图标 = text-sm 字号）。 -->
           <span class="inline-grid h-5 w-5 shrink-0 place-items-center rounded-md text-sm text-white" :class="group.icon" :style="{ background: 'var(--theme-gradient)' }" aria-hidden="true" />

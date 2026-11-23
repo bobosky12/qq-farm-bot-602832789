@@ -306,9 +306,18 @@ async function getState(view = 'animals', shopId?: number, hostGid?: string): Pr
         const state = snapshot(raw);
         state.pendingOperations = require('./operation-state').forCurrentAccount().pending().map(pendingOperationView);
         // 概览用：今日动作计数（今日统计）与三条每日例程倒计时。
-        const todayStats = require('./stats').getToday();
+        // 金券 1007 / 松果 1008 / 便便 7002 的当日增减也在这里记：当天首次观测为基线。
+        const stats = require('./stats');
+        const trackedCurrencies: Record<string, number> = {};
+        for (const id of [1007, 1008, 7002]) {
+            const item = state.currencies.find((currency: any) => Number(currency.id) === id);
+            trackedCurrencies[String(id)] = Number(item?.count) || 0;
+        }
+        stats.recordCurrencies(trackedCurrencies);
+        const todayStats = stats.getToday();
         state.operations = todayStats.actions;
         state.operationsDate = todayStats.date;
+        state.currencyStats = todayStats.currencies || {};
         state.nextChecks = require('./daily').getRoutineChecks();
         if (view === 'overview') state.career = await ranchCareer(getUserState().gid);
         if (view === 'bag') state.bag = inventory(raw);

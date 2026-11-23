@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 33,
-  "patch": 26,
-  "build": 228,
-  "version": "3.33.26",
-  "updatedAt": "2026-11-23T10:07:11.480Z",
+  "patch": 27,
+  "build": 229,
+  "version": "3.33.27",
+  "updatedAt": "2026-11-23T11:35:55.880Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.33.27",
+      "build": 229,
+      "date": "2026-11-23",
+      "summary": "界面调整：设置三分页、手机端导航恢复、牧场今日统计扩充",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.33.26",
       "build": 228,

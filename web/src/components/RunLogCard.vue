@@ -244,6 +244,17 @@ watch(allLogs, () => {
 
 function scrollToBottom() {
   scheduleLogScroll(true)
+  // 容器尺寸可能晚于数据就绪（手机端卡片在首屏外、图标/字体后到、外层布局重排），
+  // 首次滚动常常滚了个寂寞。短促重试几次：只有「确实没到底」且用户没有主动上滑时才补滚。
+  for (const delay of [120, 320, 700, 1200]) {
+    window.setTimeout(() => {
+      const el = logContainer.value
+      if (!el || !autoScroll.value)
+        return
+      if (el.scrollHeight - el.scrollTop - el.clientHeight > 2)
+        scheduleLogScroll(true)
+    }, delay)
+  }
 }
 
 onMounted(async () => {

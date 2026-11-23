@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import api from '@/api'
@@ -18,7 +17,7 @@ import { ranchActionIcons, ranchActionLabels, ranchTodayOperations } from '@/uti
 const accountStore = useAccountStore()
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const { status, currentAccountConnected: isOnline } = storeToRefs(useStatusStore())
-const { state, loading } = storeToRefs(useRanchStore())
+const { state } = storeToRefs(useRanchStore())
 // 概览走 overview 视图（上游 PR #175）：后端在该视图额外带回牧场生涯统计。
 const { refresh } = useRanchLoader('overview')
 useRanchUnmountReset()
@@ -153,6 +152,69 @@ const todayKey = computed(() => {
 
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
 const operationEntries = computed(() => Object.entries(todayOperations.value).filter(([, count]) => Number(count) > 0))
+
+/* ── 今日统计瓦片：先资源今日增减（金券/松果/便便），再固定动作计数（偷取/出售/清理/放蚊子），
+   其余动作有记录才出现。样式与同一网格里的其它瓦片完全一致。 ── */
+const RANCH_TODAY_CURRENCIES = [
+  { id: 1007, label: '金券' },
+  { id: 1008, label: '松果' },
+  { id: 7002, label: '便便' },
+] as const
+const RANCH_TODAY_ACTIONS = [
+  { key: 'steal', label: '偷取次数' },
+  { key: 'sell', label: '出售次数' },
+  { key: 'clean', label: '清理次数' },
+  { key: 'putMosquito', label: '放蚊子次数' },
+] as const
+
+function formatDelta(value: number) {
+  if (value > 0)
+    return `+${formatCount(value)}`
+  if (value < 0)
+    return `-${formatCount(-value)}`
+  return '0'
+}
+
+const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
+
+const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, label }) => {
+  const meta: any = currency(id)
+  const day = currencyStatsMap.value[String(id)] || {}
+  const baseline = Number(day.baseline) || 0
+  const current = Number(day.current) || baseline
+  const delta = current - baseline
+  return {
+    key: `currency-${id}`,
+    label,
+    image: String(meta?.image || ''),
+    icon: '',
+    value: formatDelta(delta),
+    title: `今日 ${delta >= 0 ? '+' : '-'}${formatCount(Math.abs(delta))}，当前 ${formatCount(current)}`,
+  }
+}))
+
+const fixedActionTiles = computed(() => RANCH_TODAY_ACTIONS.map(({ key, label }) => ({
+  key: `action-${key}`,
+  label,
+  image: '',
+  icon: ranchActionIcons[key] || 'i-carbon-chart-column',
+  value: String(todayOperations.value[key] ?? 0),
+  title: label,
+})))
+
+const otherActionTiles = computed(() => operationEntries.value
+  .filter(([key]) => !(RANCH_TODAY_ACTIONS as readonly string[]).some(item => item.key === key))
+  .map(([key, val]) => ({
+    key: `action-${key}`,
+    label: ranchActionLabels[key] || key,
+    image: '',
+    icon: ranchActionIcons[key] || 'i-carbon-chart-column',
+    value: String(val),
+    title: ranchActionLabels[key] || key,
+  })))
+
+const todayTiles = computed(() => [...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value])
+const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.value !== '0').length)
 </script>
 
 <template>
@@ -180,14 +242,6 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
                 <span v-if="platformLabel" class="ov-presence__item">{{ platformLabel }}</span>
               </div>
             </div>
-            <BaseButton to="/ranch/personal" variant="primary" size="sm" class="ov-farm-entry" aria-label="进入我的牧场">
-              我的牧场 <span class="i-carbon-arrow-up-right ml-1" aria-hidden="true" />
-            </BaseButton>
-            <NButton circle quaternary :loading="loading" :disabled="!currentAccountId" title="刷新牧场" aria-label="刷新牧场" @click="refresh">
-              <template #icon>
-                <span class="i-carbon-renew" />
-              </template>
-            </NButton>
           </div>
 
           <div class="ov-exp">
@@ -279,11 +333,11 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
             </div>
           </section>
 
-          <!-- 今日统计：牧场动作计数，位置与农场首页一致 -->
+          <!-- 今日统计：资源今日增减 + 牧场动作计数，位置与农场首页一致 -->
           <section class="farm-card rounded-2xl p-5">
             <h3 class="mb-3 flex items-center justify-between gap-2 text-lg font-display font-medium">
               <span class="flex items-center gap-2"><span class="i-carbon-chart-column" /> <span>今日统计</span></span>
-              <span class="text-xs text-gray-400 font-normal">{{ operationEntries.length }} 项有记录</span>
+              <span class="text-xs text-gray-400 font-normal">{{ activeTodayCount }} 项有记录</span>
             </h3>
             <EmptyState
               v-if="!isOnline"
@@ -292,27 +346,22 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
               description="启动账号后显示牧场操作统计"
               icon="i-carbon-connection-signal-off"
             />
-            <div v-else-if="!operationEntries.length" class="flex flex-col items-center justify-center gap-1 py-6 text-center">
-              <span class="i-fas-paw text-3xl text-gray-300 dark:text-gray-600" />
-              <strong class="text-sm text-gray-700 dark:text-gray-200">今天还没有牧场操作</strong>
-              <p class="text-xs text-gray-400">
-                收获、喂养、清理等动作完成后会在这里累计。
-              </p>
-            </div>
-            <div v-else class="grid grid-cols-2 gap-2 2xl:gap-3" role="region" aria-label="今日牧场动作统计">
+            <div v-else class="grid grid-cols-2 gap-2 2xl:gap-3" role="region" aria-label="今日牧场统计">
               <div
-                v-for="[key, val] in operationEntries"
-                :key="key"
+                v-for="tile in todayTiles"
+                :key="tile.key"
                 class="flex items-center justify-between rounded-xl bg-gray-50 px-3 py-2 dark:bg-gray-700/30"
+                :title="tile.title"
               >
                 <div class="min-w-0 flex items-center gap-2">
-                  <span class="select-none text-base text-teal-600 2xl:text-lg" :class="ranchActionIcons[key] || 'i-carbon-chart-column'" />
-                  <div class="truncate text-xs text-gray-500 2xl:text-sm" :title="ranchActionLabels[key] || key">
-                    {{ ranchActionLabels[key] || key }}
+                  <img v-if="tile.image" :src="tile.image" alt="" class="h-5 w-5 shrink-0 object-contain">
+                  <span v-else class="select-none text-base text-teal-600 2xl:text-lg" :class="tile.icon || 'i-carbon-chart-column'" />
+                  <div class="truncate text-xs text-gray-500 2xl:text-sm" :title="tile.label">
+                    {{ tile.label }}
                   </div>
                 </div>
                 <div class="text-sm font-bold 2xl:text-base">
-                  {{ val }}
+                  {{ tile.value }}
                 </div>
               </div>
             </div>
@@ -332,21 +381,7 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
   gap: 16px;
 }
 
-/* 与农场首页一致：入口按钮与圆形刷新钮一起顶对齐并下移 6px，避免与头像文案错位。 */
-.ov-account__head > :deep(.n-button) {
-  align-self: flex-start;
-  margin-top: 6px;
-}
-
-.ov-account__head > .ov-farm-entry {
-  align-self: flex-start;
-  margin-top: 6px;
-}
-
-/* 老版首页入口：一键进入我的牧场（与农场首页「我的农场」按钮同款同位） */
-.ov-farm-entry {
-  flex-shrink: 0;
-}
+/* 老版首页入口已移除：卡片右侧不再放「我的牧场」按钮与刷新钮 */
 
 .ov-tile__img {
   width: 20px;

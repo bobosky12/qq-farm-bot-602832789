@@ -66,7 +66,7 @@ test('首页头像保持原有尺寸与布局，并改为正圆', () => {
   assert.match(dashboard, /\.ov-avatar:hover:not\(:disabled\)/)
   assert.match(dashboard, /\.ov-avatar:focus-visible/)
   assert.match(dashboard, /\.ov-avatar:disabled/)
-  assert.match(dashboard, /我的农场/, '原有「我的农场」入口不受影响')
+  assert.doesNotMatch(dashboard, /ov-farm-entry/, '首页入口按钮已按需求移除（2026-11-23）')
 })
 
 test('圆形头像与右上角账号菜单、个人页弹窗风格统一', () => {

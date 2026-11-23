@@ -413,7 +413,7 @@ onUnmounted(() => {
           <div v-for="option in automationOptions" :key="option.key" class="tea-automation-row">
             <span>{{ option.label }}</span><MilkTeaAutomationStatus :enabled="automation ? automation[option.key] === true : null" />
           </div>
-          <RouterLink class="tea-button" to="/settings?tab=account-config" @click="close">
+          <RouterLink class="tea-button" to="/settings?tab=activity-config" @click="close">
             账号设置<span class="i-carbon-arrow-right" aria-hidden="true" />
           </RouterLink>
         </template>
