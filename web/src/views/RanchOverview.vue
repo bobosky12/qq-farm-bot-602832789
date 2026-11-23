@@ -215,7 +215,28 @@ const expTile = computed(() => ({
   title: `今日获得经验 ${formatCount(todayExpGained.value)}`,
 }))
 
-const todayTiles = computed(() => [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value])
+/**
+ * 今日统计瓦片的展示顺序：金券、经验、便便、松果、出售、偷取、清理、放蚊子。
+ *
+ * 单独维护这张表而不是依赖上面的拼接顺序——RANCH_TODAY_CURRENCIES /
+ * RANCH_TODAY_ACTIONS 是按业务语义分组写的，排版顺序会来回调整，
+ * 两者耦合会导致「改一个顺序牵连另几处」。以后调位置只改这一行。
+ * 表里没列到的动作（otherActionTiles）自动排在末尾，保持原有相对顺序。
+ */
+const TODAY_TILE_ORDER = [
+  'currency-1007', 'today-exp', 'currency-7002', 'currency-1008',
+  'action-sell', 'action-steal', 'action-clean', 'action-putMosquito',
+]
+
+const todayTiles = computed(() => {
+  const tiles = [expTile.value, ...todayCurrencyTiles.value, ...fixedActionTiles.value, ...otherActionTiles.value]
+  const rankOf = (key: string): number => {
+    const index = TODAY_TILE_ORDER.indexOf(key)
+    return index < 0 ? TODAY_TILE_ORDER.length : index
+  }
+  // Array.prototype.sort 在 ES2019+ 是稳定排序，同 rank 的条目保持原顺序。
+  return tiles.slice().sort((a, b) => rankOf(a.key) - rankOf(b.key))
+})
 const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.value !== '0').length)
 </script>
 

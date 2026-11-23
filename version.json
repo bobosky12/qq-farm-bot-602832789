@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 5,
-  "build": 235,
-  "version": "3.35.5",
-  "updatedAt": "2026-11-23T15:38:31.487Z",
+  "patch": 6,
+  "build": 236,
+  "version": "3.35.6",
+  "updatedAt": "2026-11-23T17:37:23.944Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.6",
+      "build": 236,
+      "date": "2026-11-24",
+      "summary": "牧场今日统计瓦片顺序调整",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.5",
       "build": 235,
