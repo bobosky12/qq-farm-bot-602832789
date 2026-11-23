@@ -1617,6 +1617,10 @@ function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
             return;
         }
         case 'msg': {
+            // 宿主转发来的网关回包等价于本地 handleMessage：必须刷新入站时间，
+            // 否则「距上次入站」一直增长，健康度被误判成「连接无响应」，
+            // 自动任务额度从 180/60s 收紧到 24/60s（点券礼包等低优先级任务全被让路）。
+            lastInboundMono = performance.now();
             const seq = toNum(meta.seq);
             const errorCode = toNum(meta.errorCode);
             const pending = pendingCallbacks.get(seq);
@@ -1634,6 +1638,7 @@ function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
             return;
         }
         case 'notify': {
+            lastInboundMono = performance.now();
             // body 是 EventMessage 字节：事件类型随业务演进，解码留在 worker。
             // replay=true 表示这是 worker 离线期间宿主缓存下来的事件（热重启补发）。
             handleNotify({ body: frame.body || Buffer.alloc(0) });
@@ -1655,6 +1660,7 @@ function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
             return;
         }
         case 'server-time': {
+            lastInboundMono = performance.now();
             const serverTime = toNum(meta.serverTime);
             if (serverTime > 0) syncServerTime(serverTime);
             return;

@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 0,
-  "build": 230,
-  "version": "3.35.0",
-  "updatedAt": "2026-11-23T12:17:50.483Z",
+  "patch": 1,
+  "build": 231,
+  "version": "3.35.1",
+  "updatedAt": "2026-11-23T13:21:34.824Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.1",
+      "build": 231,
+      "date": "2026-11-23",
+      "summary": "牧场统计与侧栏文案校正，修复宿主模式入站静默误判",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.0",
       "build": 230,

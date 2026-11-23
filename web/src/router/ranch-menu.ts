@@ -9,13 +9,15 @@ export interface RanchMenuItem {
   path: string
   name: string
   label: string
+  /** 面包屑用的名称（与侧栏短名称分开） */
+  navLabel?: string
   icon: string
   /** 手机底部导航使用的短名称，未设置则不出现在底部导航。 */
   mobileLabel?: string
 }
 
 export const ranchMenu: RanchMenuItem[] = [
-  { path: '/ranch', name: 'ranch-dashboard', label: '牧场概览', icon: 'i-carbon-chart-pie', mobileLabel: '概览' },
+  { path: '/ranch', name: 'ranch-dashboard', label: '概览', navLabel: '牧场概览', icon: 'i-carbon-chart-pie', mobileLabel: '概览' },
   { path: '/ranch/personal', name: 'ranch-personal', label: '个人', icon: 'i-carbon-user', mobileLabel: '个人' },
   { path: '/ranch/friends', name: 'ranch-friends', label: '好友', icon: 'i-carbon-user-multiple' },
   { path: '/ranch/activity', name: 'ranch-activity', label: '活动', icon: 'i-carbon-gift', mobileLabel: '活动' },

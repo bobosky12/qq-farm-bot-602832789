@@ -167,14 +167,6 @@ const RANCH_TODAY_ACTIONS = [
   { key: 'putMosquito', label: '放蚊子' },
 ] as const
 
-function formatDelta(value: number) {
-  if (value > 0)
-    return `+${formatCount(value)}`
-  if (value < 0)
-    return `-${formatCount(-value)}`
-  return '0'
-}
-
 const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
 
 const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, label, icon }) => {
@@ -187,8 +179,8 @@ const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, labe
     label,
     image: '',
     icon,
-    value: formatDelta(delta),
-    title: `今日 ${delta >= 0 ? '+' : '-'}${formatCount(Math.abs(delta))}，当前 ${formatCount(current)}`,
+    value: formatCount(Math.abs(delta)),
+    title: `今日变动 ${delta >= 0 ? '+' : '-'}${formatCount(Math.abs(delta))}，当前 ${formatCount(current)}`,
   }
 }))
 

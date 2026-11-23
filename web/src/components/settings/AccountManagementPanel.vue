@@ -350,7 +350,7 @@ async function refreshWxCredentials() {
         <div class="hidden sm:block sm:flex-1" aria-hidden="true" />
 
         <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 sm:mt-4 dark:border-gray-700 sm:pt-4">
-          <div class="flex flex-1 justify-end gap-1 sm:flex-initial sm:gap-2">
+          <div class="ml-auto flex flex-1 justify-end gap-1 sm:flex-initial sm:gap-2">
           <BaseButton
             variant="ghost"
             class="group relative min-h-[36px] min-w-[36px] !p-2"

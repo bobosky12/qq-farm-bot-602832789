@@ -14,7 +14,10 @@ const PIPE = process.platform === 'win32'
 const { encodeFrame, createFrameDecoder } = require('../dist/host/frame');
 
 function startFakeHost(session) {
+    const sockets = new Set();
     const server = net.createServer(socket => {
+        sockets.add(socket);
+        socket.on('close', () => sockets.delete(socket));
         const decode = createFrameDecoder(frame => {
             if (frame.meta.t === 'hello') {
                 socket.write(encodeFrame({
@@ -29,7 +32,7 @@ function startFakeHost(session) {
         socket.on('data', chunk => decode(chunk));
         socket.on('error', () => {});
     });
-    return new Promise(resolve => server.listen(PIPE, () => resolve(server)));
+    return new Promise(resolve => server.listen(PIPE, () => resolve({ server, sockets })));
 }
 
 test('worker attach 到已有存活会话：不要求 Code，userState 按快照回填', { timeout: 15000 }, async () => {
@@ -48,12 +51,12 @@ test('worker attach 到已有存活会话：不要求 Code，userState 按快照
             serverTime: Date.now(),
         },
     };
-    const server = await startFakeHost(session);
+    const { server, sockets } = await startFakeHost(session);
     process.env.FARM_SOCKET_HOST = '1';
     process.env.FARM_HOST_PIPE = PIPE;
     process.env.FARM_HOST_TOKEN = 'transport-token';
 
-    const { connect, cleanup, getUserState } = require('../dist/utils/network');
+    const { connect, cleanup, getUserState, getInboundSilenceMs } = require('../dist/utils/network');
     try {
         await new Promise((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error('复用会话分支没有触发登录成功回调')), 8000);
@@ -70,6 +73,14 @@ test('worker attach 到已有存活会话：不要求 Code，userState 按快照
         assert.equal(state.level, 88);
         assert.equal(state.gold, 123456);
         assert.deepEqual(state.unlockedSceneIds, [1, 2, 7], '已解锁场景决定牧场切换，必须回填');
+
+        // 回归：宿主模式必须刷新入站时间，否则「连接无响应」误判把自动额度从 180/60s 压到 24/60s。
+        await new Promise(resolve => setTimeout(resolve, 150));
+        const before = getInboundSilenceMs();
+        assert.ok(before > 100, '等待后应有入站静默时间');
+        for (const socket of sockets) socket.write(encodeFrame({ t: 'server-time', serverTime: Date.now() }));
+        await new Promise(resolve => setTimeout(resolve, 80));
+        assert.ok(getInboundSilenceMs() < before, '宿主转发入站帧后必须重置入站静默时间');
     } finally {
         cleanup('测试收尾');
         server.close();
