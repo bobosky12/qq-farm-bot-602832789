@@ -140,6 +140,8 @@ const INPUT_SURFACE = [
     ['friend-routes.ts', 'forceSync', 'query', 'bool', 'route'],
     ['friend-routes.ts', 'gid', 'params', 'int', 'service', ['src/services/friend-interaction-items.ts', 'positiveDecimal(friendGidInput']],
     ['friend-routes.ts', 'itemId', 'body', 'int', 'service', ['src/services/friend-interaction-items.ts', 'safePositiveNumber(itemIdInput']],
+    // 号池删除用 uid 作为字符串键（可能是 openid 派生 id），不做数值转换。
+    ['friend-routes.ts', 'uid', 'params', 'text', 'route'],
     ['friend-routes.ts', 'landIds', 'body', 'int-list', 'service', ['src/services/friend-interaction-items.ts', 'normalizeLandIds(landIdsInput']],
 
     // 登录任务：taskId 是内存表的键，不是数值。

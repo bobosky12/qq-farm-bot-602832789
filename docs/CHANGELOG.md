@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.35.0 | #230 | 2026-11-23 | 新增好友申请号池与主动加好友，界面细节调整 | — |
 | v3.33.27 | #229 | 2026-11-23 | 界面调整：设置三分页、手机端导航恢复、牧场今日统计扩充 | — |
 | v3.33.26 | #228 | 2026-11-23 | 常规更新 | — |
 | v3.33.25 | #227 | 2026-11-23 | 连接宿主 P1：跨主进程接管、统一序号、推送补发与会话快照 | — |
@@ -230,6 +231,15 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-23 · v3.35.0（#230） · 新增好友申请号池与主动加好友，界面细节调整
+
+- **分析结论**：项目原本只有 `services/invite.ts` 的 ReportArkClick 邀请码链路（只上报点击，不会真正加好友）；BUGDey v2.18.12 新增了「好友号池 + 主动加好友」，本次按最小闭环移植。
+- **协议**：`friendpb.proto` 新增 `ApplyFriendRequest/Reply`；`visitpb.proto` 的 `EnterRequest` 补 `share_key` 等分享字段、`EnterReply` 补 `apply_token`（field 10）；`userpb.proto` 补 `SetUserSettings` 与 `visit_by_share_key`（field 6）。真链路：`VisitService.Enter(reason=5, share_key)` → 拿 `apply_token` → `FriendService.ApplyFriend(gid, apply_token, source=0)`。
+- **号池**：新增 `services/friend/pool.ts`，分享卡片全账号共享（按 openid/share_key 去重），申请状态、24 小时待通过判定、每日上限（1005027）按账号隔离；落盘 `data/friend-pool.json`（可用 `FARM_FRIEND_POOL_FILE` 覆盖）。
+- **服务端**：`services/invite.ts` 升级为「自动打开拜访好友开关 → 已是好友跳过 → 逐条 Enter/Leave/ApplyFriend → 记录状态」，旧的无 share_key 链接仍走 ReportArkClick 兜底；worker 新增 `applyFriendInvites` / `getFriendPool` / `importFriendPool` API；路由新增 `/api/friends/pool`（GET/POST/DELETE）与 `/api/friends/apply-invites`，批量接口超时 10 分钟。
+- **界面**：设置页新增「好友申请」标签（导入分享链接、按状态筛选、勾选批量申请、显示每日上限与结果）；牧场今日统计的金券/松果/便便改为与其它瓦片一致的碳图标（`i-carbon-ticket/tree/recycle`），偷取/出售/清理/放蚊子的标签去掉「次数」二字；账号卡片移除「未绑定」「点击卡片切换当前账号」提示与「设为默认方案」「应用默认方案」两个按钮。
+- **验证**：新增 `friend-auto-add.test.js`（协议接线、链接解析、号池去重/账号隔离/每日上限），后端 989 条、前端 327 条测试全绿。
 
 ### 2026-11-23 · v3.33.27（#229） · 界面调整：设置三分页、手机端导航恢复、牧场今日统计扩充
 

@@ -492,6 +492,68 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
             return handleApiError(res, e);
         }
     });
+
+    // ==================== 好友号池 / 主动加好友（BUGDey v2.18.12） ====================
+    // 号池文件全账号共享，状态按账号隔离；导入/删除在主进程直接落盘，
+    // 真正发申请必须通过 worker（游戏连接在那里，且要独占自动化）。
+    app.get('/api/friends/pool', (req: Request, res: Response) => {
+        const id = getAccId(ctx, req) || 'default';
+        try {
+            res.json({ ok: true, data: require('../../services/friend/pool').snapshot(id) });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    app.post('/api/friends/pool/import', (req: Request, res: Response) => {
+        const text = String((req.body || {}).text || '');
+        const lines = text.split(/\r?\n/).map((line: string) => line.trim()).filter(Boolean);
+        const items: any[] = [];
+        for (const line of lines) {
+            const raw = line.startsWith('?') ? line.slice(1) : line;
+            const params = new URLSearchParams(raw.includes('?') ? raw.slice(raw.indexOf('?') + 1) : raw);
+            const uid = params.get('uid');
+            const openid = params.get('openid');
+            if (!uid || !openid) continue;
+            items.push({
+                uid, openid,
+                shareSource: params.get('share_source') || '',
+                docId: params.get('doc_id') || '',
+                shareKey: params.get('share_key') || '',
+                cardTime: params.get('card_time') || '',
+            });
+        }
+        try {
+            const result = items.length
+                ? require('../../services/friend/pool').upsertItems(items)
+                : { added: 0, updated: 0 };
+            res.json({ ok: true, data: { ...result, parsed: items.length } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    app.delete('/api/friends/pool/:uid', (req: Request, res: Response) => {
+        try {
+            const removed = require('../../services/friend/pool').removeItem(req.params.uid);
+            res.json({ ok: true, data: { removed } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    app.post('/api/friends/apply-invites', async (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) return res.status(400).json({ ok: false });
+        const body = req.body || {};
+        try {
+            const data = await ctx.provider.applyFriendInvites(id, Array.isArray(body.items) ? body.items : [], body.options || {});
+            res.json({ ok: true, data });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
 }
 
 module.exports = { mountFriendRoutes };

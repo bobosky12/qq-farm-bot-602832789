@@ -141,6 +141,10 @@ function createDataProvider(options: DataProviderOptions) {
             return { cleared: before - after, accountId };
         },
 
+        getFriendPool: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getFriendPool', accountRef),
+        importFriendPool: (accountRef: string, text: string) => callWorkerApi(resolveAccountRefId(accountRef), 'importFriendPool', text),
+        applyFriendInvites: (accountRef: string, items?: any[], options?: any) => callWorkerApi(resolveAccountRefId(accountRef), 'applyFriendInvites', items || [], options || {}),
+
         getLands: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getLands', true),
         getCareerProfile: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCareerProfile'),
         getIllustratedSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedSnapshot'),

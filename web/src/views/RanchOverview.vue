@@ -156,15 +156,15 @@ const operationEntries = computed(() => Object.entries(todayOperations.value).fi
 /* ── 今日统计瓦片：先资源今日增减（金券/松果/便便），再固定动作计数（偷取/出售/清理/放蚊子），
    其余动作有记录才出现。样式与同一网格里的其它瓦片完全一致。 ── */
 const RANCH_TODAY_CURRENCIES = [
-  { id: 1007, label: '金券' },
-  { id: 1008, label: '松果' },
-  { id: 7002, label: '便便' },
+  { id: 1007, label: '金券', icon: 'i-carbon-ticket' },
+  { id: 1008, label: '松果', icon: 'i-carbon-tree' },
+  { id: 7002, label: '便便', icon: 'i-carbon-recycle' },
 ] as const
 const RANCH_TODAY_ACTIONS = [
-  { key: 'steal', label: '偷取次数' },
-  { key: 'sell', label: '出售次数' },
-  { key: 'clean', label: '清理次数' },
-  { key: 'putMosquito', label: '放蚊子次数' },
+  { key: 'steal', label: '偷取' },
+  { key: 'sell', label: '出售' },
+  { key: 'clean', label: '清理' },
+  { key: 'putMosquito', label: '放蚊子' },
 ] as const
 
 function formatDelta(value: number) {
@@ -177,8 +177,7 @@ function formatDelta(value: number) {
 
 const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
 
-const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, label }) => {
-  const meta: any = currency(id)
+const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, label, icon }) => {
   const day = currencyStatsMap.value[String(id)] || {}
   const baseline = Number(day.baseline) || 0
   const current = Number(day.current) || baseline
@@ -186,8 +185,8 @@ const todayCurrencyTiles = computed(() => RANCH_TODAY_CURRENCIES.map(({ id, labe
   return {
     key: `currency-${id}`,
     label,
-    image: String(meta?.image || ''),
-    icon: '',
+    image: '',
+    icon,
     value: formatDelta(delta),
     title: `今日 ${delta >= 0 ? '+' : '-'}${formatCount(Math.abs(delta))}，当前 ${formatCount(current)}`,
   }
@@ -354,8 +353,7 @@ const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.val
                 :title="tile.title"
               >
                 <div class="min-w-0 flex items-center gap-2">
-                  <img v-if="tile.image" :src="tile.image" alt="" class="h-5 w-5 shrink-0 object-contain">
-                  <span v-else class="select-none text-base text-teal-600 2xl:text-lg" :class="tile.icon || 'i-carbon-chart-column'" />
+                  <span class="select-none text-base text-teal-600 2xl:text-lg" :class="tile.icon || 'i-carbon-chart-column'" />
                   <div class="truncate text-xs text-gray-500 2xl:text-sm" :title="tile.label">
                     {{ tile.label }}
                   </div>

@@ -2,7 +2,7 @@
 import { useNow } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
-import api, { getApiErrorMessage } from '@/api'
+import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import AccountKeepAliveCard from '@/components/settings/AccountKeepAliveCard.vue'
@@ -60,44 +60,6 @@ const showClearStoppedConfirm = ref(false)
 const clearStoppedLoading = ref(false)
 const refreshWxCredentialsLoading = ref(false)
 const accountAvatarErrors = ref<Set<string>>(new Set())
-// 默认方案：设为默认方案 / 应用默认方案的进行中状态（按账号 id 跟踪）。
-const defaultPlanSettingId = ref('')
-const defaultPlanApplyingId = ref('')
-
-async function setDefaultPlan(account: any) {
-  const id = String(account?.id || '')
-  if (!id || defaultPlanSettingId.value) return
-  defaultPlanSettingId.value = id
-  try {
-    const { data } = await api.post('/api/settings/default-plan/import', {}, { headers: { 'x-account-id': id } })
-    if (!data?.ok) throw new Error(data?.error || '保存默认方案失败')
-    notify('已把该账号当前配置保存为默认方案，新号可直接一键应用', 'primary')
-  }
-  catch (e: any) {
-    notify(`保存默认方案失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
-  }
-  finally {
-    defaultPlanSettingId.value = ''
-  }
-}
-
-async function applyDefaultPlan(account: any) {
-  const id = String(account?.id || '')
-  if (!id || defaultPlanApplyingId.value) return
-  defaultPlanApplyingId.value = id
-  try {
-    const { data } = await api.post('/api/settings/default-plan/apply', {}, { headers: { 'x-account-id': id } })
-    if (!data?.ok) throw new Error(data?.error || '应用默认方案失败')
-    notify('默认方案已应用到该账号，自动化开关、策略与间隔均已同步', 'primary')
-  }
-  catch (e: any) {
-    notify(`应用默认方案失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
-  }
-  finally {
-    defaultPlanApplyingId.value = ''
-  }
-}
-
 const alertVisible = ref(false)
 const alertConfig = ref({ title: '', message: '', type: 'primary' as 'primary' | 'danger' })
 
@@ -352,8 +314,8 @@ async function refreshWxCredentials() {
                 >
                   {{ getPlatformLabel(acc.platform) }}
                 </span>
-                <span class="truncate text-xs text-gray-500 sm:text-sm">
-                  {{ acc.uin || '未绑定' }}
+                <span v-if="acc.uin" class="truncate text-xs text-gray-500 sm:text-sm">
+                  {{ acc.uin }}
                 </span>
               </div>
             </div>
@@ -388,62 +350,37 @@ async function refreshWxCredentials() {
         <div class="hidden sm:block sm:flex-1" aria-hidden="true" />
 
         <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 sm:mt-4 dark:border-gray-700 sm:pt-4">
-          <div class="hidden items-center gap-2 text-xs text-gray-500 sm:flex">
-            <span>{{ acc.name ? '点击卡片切换当前账号' : '' }}</span>
-          </div>
           <div class="flex flex-1 justify-end gap-1 sm:flex-initial sm:gap-2">
-            <BaseButton
-              variant="ghost"
-              class="group relative min-h-[36px] min-w-[36px] !p-2"
-              :title="defaultPlanSettingId === String(acc.id) ? '保存中…' : '设为默认方案'"
-              aria-label="设为默认方案"
-              :loading="defaultPlanSettingId === String(acc.id)"
-              @click.stop="setDefaultPlan(acc)"
-            >
-              <span class="i-carbon-document-export" />
-              <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">设为默认方案</span>
-            </BaseButton>
-            <BaseButton
-              variant="ghost"
-              class="group relative min-h-[36px] min-w-[36px] !p-2"
-              :title="defaultPlanApplyingId === String(acc.id) ? '应用中…' : '应用默认方案'"
-              aria-label="应用默认方案"
-              :loading="defaultPlanApplyingId === String(acc.id)"
-              @click.stop="applyDefaultPlan(acc)"
-            >
-              <span class="i-carbon-document-import" />
-              <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">应用默认方案</span>
-            </BaseButton>
-            <BaseButton
-              variant="ghost"
-              class="group relative min-h-[36px] min-w-[36px] !p-2"
-              title="设置"
-              aria-label="设置"
-              @click.stop="emit('openSettings', acc)"
-            >
-              <span class="i-carbon-settings" />
-              <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">设置</span>
-            </BaseButton>
-            <BaseButton
-              variant="ghost"
-              class="group relative min-h-[36px] min-w-[36px] !p-2"
-              title="编辑"
-              aria-label="编辑"
-              @click.stop="openEditModal(acc)"
-            >
-              <span class="i-carbon-edit" />
-              <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">编辑</span>
-            </BaseButton>
-            <BaseButton
-              variant="ghost"
-              class="group relative min-h-[36px] min-w-[36px] text-red-500 !p-2 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
-              title="删除"
-              aria-label="删除"
-              @click.stop="handleDelete(acc)"
-            >
-              <span class="i-carbon-trash-can" />
-              <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">删除</span>
-            </BaseButton>
+          <BaseButton
+            variant="ghost"
+            class="group relative min-h-[36px] min-w-[36px] !p-2"
+            title="设置"
+            aria-label="设置"
+            @click.stop="emit('openSettings', acc)"
+          >
+            <span class="i-carbon-settings" />
+            <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">设置</span>
+          </BaseButton>
+          <BaseButton
+            variant="ghost"
+            class="group relative min-h-[36px] min-w-[36px] !p-2"
+            title="编辑"
+            aria-label="编辑"
+            @click.stop="openEditModal(acc)"
+          >
+            <span class="i-carbon-edit" />
+            <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">编辑</span>
+          </BaseButton>
+          <BaseButton
+            variant="ghost"
+            class="group relative min-h-[36px] min-w-[36px] text-red-500 !p-2 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
+            title="删除"
+            aria-label="删除"
+            @click.stop="handleDelete(acc)"
+          >
+            <span class="i-carbon-trash-can" />
+            <span class="pointer-events-none absolute bottom-full left-1/2 z-20 mb-2 whitespace-nowrap rounded-md bg-gray-900 px-2 py-1 text-xs text-white opacity-0 shadow-lg transition-opacity duration-150 -translate-x-1/2 dark:bg-gray-100 dark:text-gray-900 group-hover:opacity-100">删除</span>
+          </BaseButton>
           </div>
         </div>
       </div>

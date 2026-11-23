@@ -115,6 +115,8 @@ test('解析约定格式的查询串', () => {
         openid: 'abc',
         shareSource: '7',
         docId: '9',
+        shareKey: null,
+        cardTime: null,
     });
 });
 
@@ -124,6 +126,8 @@ test('没有前导问号也能解析', () => {
         openid: 'abc',
         shareSource: null,
         docId: null,
+        shareKey: null,
+        cardTime: null,
     });
 });
 
@@ -135,8 +139,8 @@ test('整段分享链接（带协议与路径）也能解析出参数', () => {
 });
 
 test('缺失参数返回 null，空输入不抛错', () => {
-    assert.deepEqual(invite.parseShareLink(''), { uid: null, openid: null, shareSource: null, docId: null });
-    assert.deepEqual(invite.parseShareLink('?uid=1'), { uid: '1', openid: null, shareSource: null, docId: null });
+    assert.deepEqual(invite.parseShareLink(''), { uid: null, openid: null, shareSource: null, docId: null, shareKey: null, cardTime: null });
+    assert.deepEqual(invite.parseShareLink('?uid=1'), { uid: '1', openid: null, shareSource: null, docId: null, shareKey: null, cardTime: null });
 });
 
 test('URL 编码的参数会被解码', () => {

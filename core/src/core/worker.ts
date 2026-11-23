@@ -1423,6 +1423,16 @@ async function handleApiCall(msg: any): Promise<void> {
                 case 'operateRanch':
                     result = await require('../services/ranch').operateRanch(args[0], args[1]);
                     break;
+                case 'applyFriendInvites':
+                    // 主动加好友：分享卡片 Enter 拿令牌 → ApplyFriend（BUGDey v2.18.12 链路）
+                    result = await require('../services/invite').applyInviteList(args[0], args[1] || {});
+                    break;
+                case 'getFriendPool':
+                    result = require('../services/invite').getFriendPoolSnapshot(args[0]);
+                    break;
+                case 'importFriendPool':
+                    result = require('../services/invite').importShareText(args[0]);
+                    break;
                 case 'getLands':
                     result = await getLandsDetail(args[0] === true);
                     break;

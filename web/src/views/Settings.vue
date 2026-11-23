@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 import api, { getApiErrorMessage } from '@/api'
 import AccountFeatureSettings from '@/components/settings/AccountFeatureSettings.vue'
 import AccountManagementPanel from '@/components/settings/AccountManagementPanel.vue'
+import FriendApplyTab from '@/components/settings/FriendApplyTab.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -30,8 +31,8 @@ const accountStore = useAccountStore()
 const userStore = useUserStore()
 const settingStore = useSettingStore()
 
-type SettingsTab = 'account' | 'farm-config' | 'ranch-config' | 'activity-config' | 'notification' | 'system-settings' | 'system'
-const settingsTabKeys: SettingsTab[] = ['account', 'farm-config', 'ranch-config', 'activity-config', 'notification', 'system-settings', 'system']
+type SettingsTab = 'account' | 'friend-apply' | 'farm-config' | 'ranch-config' | 'activity-config' | 'notification' | 'system-settings' | 'system'
+const settingsTabKeys: SettingsTab[] = ['account', 'friend-apply', 'farm-config', 'ranch-config', 'activity-config', 'notification', 'system-settings', 'system']
 // 旧标签仍可能出现在收藏夹或外部链接里，统一折到新分类上。
 const LEGACY_TAB_ALIAS: Record<string, SettingsTab> = {
   'strategy': 'farm-config',
@@ -71,6 +72,7 @@ watch(() => route.query.tab, (value) => {
 
 const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-settings' },
+  { key: 'friend-apply', label: '好友申请', icon: 'i-carbon-user-favorite' },
   { key: 'farm-config', label: '农场设置', icon: 'i-carbon-sprout' },
   { key: 'ranch-config', label: '牧场设置', icon: 'i-fas-paw' },
   { key: 'activity-config', label: '活动设置', icon: 'i-carbon-events' },
@@ -907,6 +909,9 @@ async function handleResetSystemConfig() {
       <div class="settings-body">
         <!-- 账号管理 -->
         <AccountManagementPanel v-if="activeTab === 'account'" @open-settings="openAccountSettings" />
+
+        <!-- 好友申请：分享卡片号池 + 主动加好友（BUGDey v2.18.12） -->
+        <FriendApplyTab v-else-if="activeTab === 'friend-apply'" />
 
         <!-- 农场设置：原「账号设置」的农场模块（种植/土地/好友/偷菜/商人/日常） -->
         <div v-else-if="activeTab === 'farm-config'" class="space-y-4">

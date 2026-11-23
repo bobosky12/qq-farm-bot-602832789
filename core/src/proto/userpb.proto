@@ -248,11 +248,21 @@ message UserSettings {
     int64 qq_friend_recommend_authorized = 1;
     bool disable_nudge = 2;
     bool field_3 = 3;
+    int32 field_5 = 5;
+    // 6 = 「好友功能 · 点击分享链接可拜访好友」：为 0 时 Enter(reason=5) 报 1002007，拿不到申请令牌
+    int32 visit_by_share_key = 6;
 }
 
 message GetUserSettingsReply {
     UserSettings settings = 1;
 }
+
+// 只提交要改的那一项：SetUserSettings 请求体就是 {"field":6,"value":"1"}
+message SetUserSettingsRequest {
+    int32 visit_by_share_key = 6;
+}
+
+message SetUserSettingsReply {}
 
 // ============ 批量获取用户信息 ============
 message BatchGetBasicInfoRequest {

@@ -22,8 +22,13 @@ enum EnterReason {
 
 // ============ 进入好友农场 ============
 message EnterRequest {
-    int64 host_gid = 1;      // 好友的GID
-    int32 reason = 2;        // EnterReason 进入原因
+    int64 host_gid = 1;       // 好友的GID
+    int32 reason = 2;         // EnterReason 进入原因
+    int32 host_type = 3;      // 抓包: 0
+    int64 share_id = 4;       // 抓包: 0
+    string share_open_id = 5; // 分享人 open_id
+    int64 share_cfg_id = 6;   // 抓包: 0
+    string share_key = 7;     // 分享卡片 32 位 key（reason=5 时必带）
 }
 
 message BriefDogInfo {
@@ -36,6 +41,7 @@ message EnterReply {
     BriefDogInfo brief_dog_info = 3;                // 好友当前上场的狗
     // field 4: nudge_info (不需要)
     gamepb.weatherpb.WeatherStatus weather = 13;    // 当前好友农场的现场天气（最新版权威来源）
+    string apply_token = 10;  // 分享卡片进入时带回的好友申请令牌
 }
 
 // ============ 离开好友农场 ============

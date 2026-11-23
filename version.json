@@ -1,12 +1,20 @@
 {
   "major": 3,
-  "minor": 33,
-  "patch": 27,
-  "build": 229,
-  "version": "3.33.27",
-  "updatedAt": "2026-11-23T11:35:55.880Z",
+  "minor": 35,
+  "patch": 0,
+  "build": 230,
+  "version": "3.35.0",
+  "updatedAt": "2026-11-23T12:17:50.483Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.0",
+      "build": 230,
+      "date": "2026-11-23",
+      "summary": "新增好友申请号池与主动加好友，界面细节调整",
+      "commit": "—",
+      "type": "minor"
+    },
     {
       "version": "3.33.27",
       "build": 229,
