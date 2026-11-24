@@ -5,25 +5,23 @@ import test from 'node:test'
 
 const read = relative => readFileSync(new URL(relative, import.meta.url), 'utf8')
 const dashboard = read('../src/views/Dashboard.vue')
-const mobile = dashboard.slice(dashboard.indexOf('@media (max-width: 639px)'))
-
-test('手机端「所有事件」与「所有模块」同列同宽', () => {
-  const moduleBlock = mobile.match(/\.dashboard-log-module \{([\s\S]*?)\}/)?.[1] || ''
-  const eventBlock = mobile.match(/\.dashboard-log-event \{([\s\S]*?)\}/)?.[1] || ''
-  assert.match(moduleBlock, /grid-row: 2;/)
-  assert.match(moduleBlock, /grid-column: 1;/)
-  assert.match(eventBlock, /grid-row: 3;/)
-  assert.match(eventBlock, /grid-column: 1;/)
-  assert.doesNotMatch(eventBlock, /grid-column: 1 \/ -1/, '不再独占整行，长度与模块下拉一致')
-})
-
-test('PC / 宽容器布局保持不变', () => {
-  assert.match(dashboard, /@container runtime-log \(min-width: 640px\)/)
-  assert.match(dashboard, /grid-template-columns: minmax\(160px, 1fr\) 120px 140px 32px;/)
-  assert.match(dashboard, /\.dashboard-log-toolbar \{\s*display: grid;\s*grid-template-columns: minmax\(0, 1fr\) minmax\(0, 1fr\) 32px;/)
-})
+const panel = read('../src/components/RunLogPanel.vue')
 
 test('首页不再挂载运行诊断模块', () => {
   assert.doesNotMatch(dashboard, /RuntimeDiagnosticsCard/)
   assert.doesNotMatch(dashboard, /运行诊断/)
+})
+
+test('首页日志区只剩 RunLogPanel，旧工具栏实现不会复活', () => {
+  assert.match(dashboard, /<RunLogPanel default-module="farm"/)
+  // 这两族类名属于已被统一组件取代的旧实现，留在首页就会与组件抢同一块区域。
+  assert.ok(!dashboard.includes('.dashboard-log-toolbar'), '旧日志工具栏样式不应回到首页')
+  assert.ok(!dashboard.includes('.log-filters {'), '旧筛选区样式不应回到首页')
+})
+
+test('宽的筛选区按列铺开，不折成多行', () => {
+  const start = panel.indexOf('@media (min-width: 640px)')
+  assert.ok(start >= 0, 'RunLogPanel 应保留宽屏断点')
+  const wide = panel.slice(start, panel.indexOf('\n}\n', start))
+  assert.match(wide, /grid-template-columns:\s*repeat\(5, minmax\(0, 8rem\)\) auto/, '五个筛选项 + 按钮列同一行')
 })

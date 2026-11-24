@@ -20,6 +20,8 @@ test('移除单位后仍保留数字、负数配色与动作统计列表', () =>
   assert.match(dashboard, /v-for="\[key, val\] in operationGroups.active"/)
 })
 
-test('运行日志里的「连续重复 N 次」文案不受影响', () => {
-  assert.match(dashboard, /连续重复 \$\{log\.repeatCount\} 次/)
+test('运行日志里的重复次数文案不受影响', () => {
+  // 日志视图已收口到 RunLogPanel，重复次数的提示语跟着搬家。
+  const panel = readFileSync(new URL('../src/components/RunLogPanel.vue', import.meta.url), 'utf8')
+  assert.match(panel, /起重复 \$\{group\.count\} 次/)
 })

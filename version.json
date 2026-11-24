@@ -1,12 +1,20 @@
 {
   "major": 3,
-  "minor": 35,
-  "patch": 11,
-  "build": 251,
-  "version": "3.35.11",
-  "updatedAt": "2026-11-24T05:51:49.128Z",
+  "minor": 36,
+  "patch": 0,
+  "build": 252,
+  "version": "3.36.0",
+  "updatedAt": "2026-11-24T07:07:16.642Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.0",
+      "build": 252,
+      "date": "2026-11-24",
+      "summary": "同步上游 #184：新增统一日志组件与二级模块筛选",
+      "commit": "—",
+      "type": "minor"
+    },
     {
       "version": "3.35.11",
       "build": 251,

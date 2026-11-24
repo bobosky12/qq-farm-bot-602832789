@@ -4,8 +4,12 @@ import { defineStore } from 'pinia'
 import { io } from 'socket.io-client'
 import { computed, ref } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
+import { LOG_CACHE_LIMIT } from '@/constants/log-filters'
 import { useAccountStore } from '@/stores/account'
 import { createRequestGuard } from '@/utils/request-guard'
+
+/** 后端种植日志节流追加的合并提示后缀，展示前剥掉（面板已用 ×N 表达重复）。 */
+const MERGED_SUFFIX_RE = /（同样状态重复 \d+ 次，已合并）\s*$/
 
 // Define interfaces for better type checking
 interface DailyGift {
@@ -79,6 +83,9 @@ export const useStatusStore = defineStore('status', () => {
     const ts = Number(entry.ts) || Date.parse(String(entry.time || '')) || Date.now()
     return {
       ...entry,
+      // 后端种植日志节流会在尾部追加「（同样状态重复 N 次，已合并）」，
+      // 面板本身已按 ×N 聚合，留着就是双重计数，展示前统一剥掉。
+      msg: typeof entry.msg === 'string' ? entry.msg.replace(MERGED_SUFFIX_RE, '') : entry.msg,
       ts,
       time: entry.time || new Date(ts).toISOString().replace('T', ' ').slice(0, 19),
     }
@@ -87,8 +94,9 @@ export const useStatusStore = defineStore('status', () => {
   function pushRealtimeLog(entry: any) {
     const next = normalizeLogEntry(entry)
     logs.value.push(next)
-    if (logs.value.length > 300)
-      logs.value = logs.value.slice(-300)
+    // 缓存比显示行数多：逐块务农日志密集，先给聚合留出余量，聚合后再按 maxLogs 截断。
+    if (logs.value.length > LOG_CACHE_LIMIT)
+      logs.value = logs.value.slice(-LOG_CACHE_LIMIT)
   }
 
   /**
@@ -137,6 +145,10 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function handleRealtimeLogsSnapshot(payload: any) {
+    // 筛选启用时实时日志已暂停，全量快照会把筛选结果覆盖回全量日志，
+    // 导致列表在「筛选结果」和「全部日志」之间来回跳。
+    if (!realtimeLogsEnabled.value)
+      return
     const body = (payload && typeof payload === 'object') ? payload : {}
     if (!isRealtimeAccount(body))
       return

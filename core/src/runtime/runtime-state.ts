@@ -10,6 +10,24 @@ interface RuntimeStateOptions {
     operationKeys?: string[];
 }
 
+/**
+ * 日志 tag → 模块名。
+ *
+ * 历史原因：写入日志时 `meta.module` 大部分是空的，真正标识归属的是中文 tag。
+ * 若只按 `meta.module` 过滤，「农场/牧场/好友」这些筛选在面板上会一条都筛不出来。
+ * 这里做一层归一化，两种来源都能命中。
+ */
+const TAG_MODULE: Record<string, string> = {
+    '农场': 'farm',
+    '好友': 'friend',
+    '仓库': 'warehouse',
+    '牧场': 'ranch',
+    '任务': 'task',
+    '系统': 'system',
+    '错误': 'system',
+    'QQ机器人': 'qqbot',
+};
+
 interface LogEntry {
     time: string;
     tag: string;
@@ -190,12 +208,17 @@ function createRuntimeState(options: RuntimeStateOptions) {
             if (tag && String(l.tag || '') !== tag) return false;
             if (moduleName) {
                 const logModule = String((l.meta || {}).module || '');
-                if (moduleName === 'system') {
-                    const isSystemTag = String(l.tag || '') === '系统' || String(l.tag || '') === '错误';
-                    if (logModule !== 'system' && !isSystemTag) return false;
-                } else if (logModule !== moduleName) {
-                    return false;
-                }
+                // 日志的模块信息实际落在 tag 上（meta.module 多为空），按 tag 归一化后一起匹配；
+                // moduleName 支持逗号分隔多选，供「农场」一级模块一次拉 farm/friend/warehouse。
+                const logTag = String(l.tag || '');
+                const tagModule = TAG_MODULE[logTag] || '';
+                const modules = moduleName.split(',').map(s => s.trim()).filter(Boolean);
+                const matched = modules.some((m) => {
+                    if (m === 'system')
+                        return logModule === 'system' || tagModule === 'system';
+                    return logModule === m || tagModule === m;
+                });
+                if (!matched) return false;
             }
             if (eventName && String((l.meta || {}).event || '') !== eventName) return false;
             if (isWarn !== undefined && isWarn !== null && String(isWarn) !== '') {
