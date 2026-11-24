@@ -192,3 +192,42 @@ test('入口不再硬编码关闭自动登录，改为读取系统配置/环境�
     assert.match(source, /resolveAutoStartAccounts/);
     assert.doesNotMatch(source, /autoStartAccounts:\s*false/);
 });
+
+test('凭证已失效（needsRescan）时不拿一次性旧 Code 硬连，直接交给重新扫码', async () => {
+    resetMocks();
+    mocks.wx = {
+        ensureFreshGameCode: async () => ({
+            ok: false,
+            accountName: '微信账号',
+            error: 'code=-109 msg=RC_PARAMS_INVALID',
+            needsRescan: true,
+        }),
+    };
+    mocks.qq = { tryRefreshQqGameCode: async () => { throw new Error('不应调用 QQ 重签'); } };
+    const { provider, started, logs } = makeProvider({
+        id: '5', name: '微信账号', platform: 'wx', code: 'STALE-ONE-TIME', loginBuffer: 'buffer', refreshtoken: 'rt',
+    });
+
+    assert.equal(await provider.startAccount('5'), false);
+    // 旧 Code 是一次性的、上次运行已经消费掉：拿它建连只会被网关 400，
+    // 日志里还会留下「启动过又掉线」的假象，比干脆不启动更难排查。
+    assert.equal(started.length, 0, '凭证失效时不该硬连旧 Code');
+    assert.ok(logs.some(entry => String(entry[1]).includes('需要重新扫码')));
+});
+
+test('换码临时失败（非凭证失效）仍回退已保存 Code，不把账号卡死', async () => {
+    resetMocks();
+    mocks.wx = {
+        ensureFreshGameCode: async () => ({ ok: false, accountName: '微信账号', error: 'ETIMEDOUT' }),
+    };
+    mocks.qq = { tryRefreshQqGameCode: async () => { throw new Error('不应调用 QQ 重签'); } };
+    const { provider, started, logs } = makeProvider({
+        id: '6', name: '微信账号', platform: 'wx', code: 'MAYBE-STILL-OK', loginBuffer: 'buffer', refreshtoken: 'rt',
+    });
+
+    // 网络抖动导致的换码失败不该直接判死：旧 Code 仍然值得试一次，
+    // 真的失效了还有保活按退避策略重登。
+    assert.equal(await provider.startAccount('6'), true);
+    assert.equal(started.length, 1);
+    assert.ok(logs.some(entry => String(entry[1]).includes('尝试用现有 Code 启动')));
+});

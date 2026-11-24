@@ -15,6 +15,12 @@ services:
     image: qq-farm-bot:latest
     container_name: qq-farm-bot
     restart: unless-stopped
+    # 让 docker 注入 tini 作为 PID 1，node 变成它的子进程：
+    #   - node 不再直接当 PID 1，信号语义回到正常进程该有的样子；
+    #   - worker 子进程被回收后有 init 负责收尸，不会堆僵尸。
+    # 停服本身靠 core/client.ts 里的 SIGTERM 钩子（先等凭证写盘收尾再退出），
+    # 两者缺一不可：init 管进程树，钩子管「别把滚动中的 refreshtoken 切在中间」。
+    init: true
     ports:
       - "${PORT:-3007}:3007"
     volumes:

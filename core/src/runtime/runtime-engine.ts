@@ -188,8 +188,18 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
             const id = String(acc.id || '');
             const name = String(acc.name || acc.nick || id);
             try {
-                await dataProvider.startAccount(id);
-                addAccountLog('auto_login', `账号 ${name} 已随服务启动自动登录`, id, name);
+                const started = await dataProvider.startAccount(id);
+                if (started === false) {
+                    // 换码失败且凭证已失效：账号根本没起来，日志已经由 startAccount 写明原因，
+                    // 这里只补一条汇总，避免再写一次「已自动登录」的假成功。
+                    log('错误', `账号 ${name} 未能自动登录，详见账号日志`, { accountId: id, accountName: name });
+                }
+                else {
+                    // 「已发起」而不是「已登录」：startAccount 返回 true 只代表换码/fork 这一步走完了，
+                    // 真正有没有连上要看后面的状态推送。之前这里直接写「已随服务启动自动登录」，
+                    // 而容器里网关 400 常常在 1 秒后就到，日志却留着一条成功记录，排查时会被带偏。
+                    addAccountLog('auto_login', `账号 ${name} 已发起自动登录，等待连接结果`, id, name);
+                }
             }
             catch (error: any) {
                 log('错误', `账号 ${name} 自动登录失败: ${(error && error.message) || String(error)}`, {
@@ -218,11 +228,15 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
             startAdminServer(dataProvider);
         }
 
+        // 保活必须**先于**自动登录装上：启动批次的账号照样会掉线，而且这批最脆弱
+        // （容器刚起来时 DNS/网络可能还没就绪、换码大概率失败）。之前它排在自动登录之后，
+        // 启动期那几次掉线落在「保活依赖还没注入」的空窗里——`wx-keepalive` 的 log()
+        // 在依赖缺失时是静默 no-op，连一条「N 秒后自动重登」都不会留下，账号就此停住。
+        startAccountKeepAlive();
+
         if (shouldAutoStartAccounts) {
             await startAllAccounts();
         }
-
-        startAccountKeepAlive();
     }
 
     function stopAllAccounts(): void {

@@ -689,3 +689,164 @@ test('前端入口 HTML 必须每次回源，否则更新后浏览器还在跑�
     const index = read('core/src/controllers/admin/index.ts');
     assert.match(index, /no-cache, no-store, must-revalidate/, 'index.html 要禁用缓存');
 });
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * Docker 容器部署：没有 .git、没有 git 命令、也没有更新执行器。
+ * 这条路径以前会把源码部署的诊断原样搬过来（「没有找到 git 仓库（/app）」
+ * 「缺少更新执行器」），NAS 用户看到这两句既不知道发生了什么，也不知道该做什么。
+ * 现在的要求是：说清「版本由镜像决定」，给出宿主机重建命令，并且检查更新仍然可用。
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 造一个容器形态的服务：没有 .git、没有 tools/，只有会被镜像打进去的 version.json。 */
+function makeDockerService(overrides = {}) {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'farm-release-docker-'));
+    const localVersion = overrides.localVersion || { version: '3.36.2', build: 255 };
+    fs.writeFileSync(path.join(root, 'version.json'), JSON.stringify(localVersion), 'utf8');
+    const calls = [];
+    const service = createSystemUpdateService({
+        repoRoot: root,
+        runtimeDir: path.join(root, 'runtime'),
+        releasesDir: path.join(root, 'releases'),
+        mode: 'docker',
+        remoteRepo: '602832789/qq-farm-bot',
+        execGit: async () => {
+            throw new Error('容器里没有 git，任何 git 调用都是 bug');
+        },
+        spawnRunner: () => {
+            throw new Error('容器里不该拉起更新执行器');
+        },
+        fetchImpl: async (url) => {
+            calls.push(String(url));
+            return new Response(JSON.stringify({ version: '3.36.2', build: 255 }), { status: 200 });
+        },
+        ...overrides,
+    });
+    return { service, root, calls };
+}
+
+test('Docker 部署：说明指向宿主机重建，不再报「没有 git 仓库 / 缺少执行器」', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        const status = await service.getStatus();
+        assert.equal(status.mode, 'docker');
+        assert.equal(status.gitSupported, false);
+        assert.match(status.unsupportedReason, /Docker 容器/);
+        assert.ok(!status.unsupportedReason.includes('没有找到 git 仓库'), '容器部署不该出现源码部署的诊断');
+        assert.match(status.applyUnsupportedReason, /宿主机/);
+        assert.ok(!status.applyUnsupportedReason.includes('缺少更新执行器'), '容器语境里谈执行器没有意义');
+        assert.equal(status.applySupported, false);
+        // 检查更新要仍然可用——只是换一条不依赖 git 的通道
+        assert.equal(status.canCheck, true);
+        assert.equal(status.deployCommand, 'git pull --ff-only && docker compose up -d --build');
+        // 版本号从 version.json 读，容器里也看得见（以前这里会显示「未知」）
+        assert.equal(status.localVersion, '3.36.2');
+        assert.equal(status.localBuild, 255);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：检查更新读远端 version.json，能判定有新版本', async () => {
+    const { service, root, calls } = makeDockerService({
+        fetchImpl: async (url) => {
+            calls.push(String(url));
+            return new Response(JSON.stringify({
+                version: '3.37.0',
+                build: 260,
+                updatedAt: '2026-11-25T00:00:00.000Z',
+                history: [{ version: '3.37.0', build: 260, summary: '新增批量操作' }],
+            }), { status: 200 });
+        },
+    });
+    try {
+        const status = await service.checkForUpdates();
+        assert.equal(calls.length, 1);
+        assert.match(calls[0], /api\.github\.com\/repos\/602832789\/qq-farm-bot\/contents\/version\.json/);
+        assert.equal(status.hasNewVersion, true);
+        assert.equal(status.remoteVersion.version, '3.37.0');
+        assert.equal(status.remoteVersion.build, 260);
+        assert.equal(status.remoteVersion.summary, '新增批量操作');
+        assert.equal(status.remoteCheckError, '');
+        assert.ok(status.remoteCheckedAt > 0);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：远端与本地同版本时不提示更新', async () => {
+    const { service, root } = makeDockerService();
+    try {
+        const status = await service.checkForUpdates();
+        assert.equal(status.hasNewVersion, false);
+        assert.equal(status.remoteVersion.version, '3.36.2');
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：远端读不到时给出原因，不抛错', async () => {
+    const { service, root } = makeDockerService({
+        fetchImpl: async () => new Response('', { status: 404 }),
+    });
+    try {
+        // 关键：检查失败要变成一条可读的原因，而不是让面板弹一个 400
+        const status = await service.checkForUpdates();
+        assert.equal(status.hasNewVersion, false);
+        assert.match(status.remoteCheckError, /远端仓库或分支不存在/);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('Docker 部署：远端版本比较按 build 优先，同 build 再比语义化版本', async () => {
+    // build 是单调递增的真源：远端 build 更大就算新，哪怕版本字符串看起来更小
+    const buildCase = makeDockerService({
+        fetchImpl: async () => new Response(JSON.stringify({ version: '3.35.0', build: 300 }), { status: 200 }),
+    });
+    try {
+        const status = await buildCase.service.checkForUpdates();
+        assert.equal(status.hasNewVersion, true, 'build 更大就该判为新版本');
+    }
+    finally {
+        cleanup(buildCase.root);
+    }
+
+    // build 相同（都为 0）时退回语义化比较：3.9.0 → 3.10.0 字符串比较会判反
+    const semverCase = makeDockerService({
+        localVersion: { version: '3.9.0', build: 0 },
+        fetchImpl: async () => new Response(JSON.stringify({ version: '3.10.0', build: 0 }), { status: 200 }),
+    });
+    try {
+        const status = await semverCase.service.checkForUpdates();
+        assert.equal(status.hasNewVersion, true, '3.10.0 应该比 3.9.0 新');
+    }
+    finally {
+        cleanup(semverCase.root);
+    }
+});
+
+test('源码部署：没有 .git 时仍按源码语义报「没有找到 git 仓库」', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'farm-release-source-'));
+    try {
+        fs.writeFileSync(path.join(root, 'version.json'), JSON.stringify({ version: '3.36.2', build: 255 }), 'utf8');
+        const service = createSystemUpdateService({
+            repoRoot: root,
+            runtimeDir: path.join(root, 'runtime'),
+            releasesDir: path.join(root, 'releases'),
+            mode: 'source',
+            execGit: async () => {
+                throw new Error('should not run');
+            },
+        });
+        const status = await service.getStatus();
+        assert.match(status.unsupportedReason, /没有找到 git 仓库/);
+        assert.equal(status.deployCommand, '', '源码部署不该出现容器重建命令');
+    }
+    finally {
+        cleanup(root);
+    }
+});

@@ -537,6 +537,21 @@ function createDataProvider(options: DataProviderOptions) {
                             startWorker(latest || acc);
                             return true;
                         }
+                        // 凭证已被服务端吊销（-109 / ticket 被拒之类）：旧 Code 必然也失效，
+                        // 拿它建连只会被网关回 400，日志里却看起来「启动过又掉线」，很难查。
+                        // 这种情况不再硬连，直接把账号标成掉线并说明要重新扫码，
+                        // 剩下的交给保活（它在自动登录之前就已装好，会按退避策略重试换码）。
+                        if (result.needsRescan) {
+                            addAccountLog(
+                                'auto_code_refresh_failed',
+                                `账号 ${result.accountName} 的微信凭证已失效（${result.error || '需要重新授权'}），已跳过本次启动，需要重新扫码登录`,
+                                id,
+                                result.accountName,
+                                { reason: 'manual_start', needsRescan: true },
+                            );
+                            setAccountRuntimeState(id, 'offline');
+                            return false;
+                        }
                         addAccountLog('auto_code_refresh_failed', `账号 ${result.accountName} 启动前续期 Code 失败: ${result.error}，尝试用现有 Code 启动`, id, result.accountName, { reason: 'manual_start' });
                     } else {
                         const { tryRefreshQqGameCode } = require('../services/qq-credential');

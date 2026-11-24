@@ -47,6 +47,10 @@ process.on('uncaughtException', (error: any) => {
 
 // 打包后 worker 由当前可执行文件以 --worker 模式启动
 const isWorkerProcess: boolean = process.env.FARM_WORKER === '1';
+
+/** 主进程的运行引擎句柄：停服钩子要拿它停账号，所以不能只在 else 分支里当局部变量。 */
+let runtimeEngineRef: any = null;
+
 if (isWorkerProcess) {
     require(`${baseDir}/core/worker`);
 } else {
@@ -75,6 +79,7 @@ if (isWorkerProcess) {
             emitRealtimeAccountLog(entry);
         },
     });
+    runtimeEngineRef = runtimeEngine;
 
     runtimeEngine.start({
         startAdminServer: true,
@@ -82,4 +87,62 @@ if (isWorkerProcess) {
     }).catch((err: any) => {
         mainLogger.error('runtime bootstrap failed', { error: err && err.message ? err.message : String(err) });
     });
+}
+
+/** 停服时等凭证操作收尾的上限。微信换码一次通常 1~3 秒，5 秒足够，再长会拖慢 docker stop。 */
+const CREDENTIAL_DRAIN_TIMEOUT_MS = 5000;
+
+/**
+ * 优雅停服。
+ *
+ * 容器里 node 直接当 PID 1（`CMD ["node", "client.js"]`），而 Linux 内核对 PID 1 的
+ * **默认动作**信号处理是「直接忽略」——SIGTERM 没有注册 handler 时内核不会终止它，
+ * `docker stop` 等完宽限期后一律 SIGKILL。这一刀正好会切断
+ * 「refreshtoken 已刷新、新值还没落盘」的窗口：服务端已经把旧 token 作废了，本地却还是旧值，
+ * 于是账号里永久留下一个死 token，之后每次启动都是 -109，只能重新扫码。
+ *
+ * 所以这里显式接管信号：先等在途凭证操作收尾，再停账号，最后正常退出。
+ * 显式注册 handler 之后内核会正常投递信号，PID 1 身份不再是障碍；
+ * compose 里的 `init: true` 另行负责回收僵尸子进程，两件事互不替代。
+ */
+let shuttingDown = false;
+async function gracefulShutdown(signal: string): Promise<void> {
+    if (shuttingDown) {
+        mainLogger.warn('graceful shutdown already in progress', { signal });
+        return;
+    }
+    shuttingDown = true;
+    const startedAt = Date.now();
+    mainLogger.info('graceful shutdown begin', { signal });
+    try {
+        const { waitForCredentialIdle, credentialBusyCount } = require(`${baseDir}/services/wx-credential`);
+        const pending = Number(credentialBusyCount()) || 0;
+        if (pending > 0) {
+            const drained = await waitForCredentialIdle(CREDENTIAL_DRAIN_TIMEOUT_MS);
+            mainLogger.info('credential drain finished', {
+                pending,
+                drained: !!drained,
+                elapsedMs: Date.now() - startedAt,
+            });
+        }
+    }
+    catch (err: any) {
+        mainLogger.warn('credential drain failed', { error: String(err && err.message ? err.message : err) });
+    }
+    try {
+        if (runtimeEngineRef && typeof runtimeEngineRef.stopAllAccounts === 'function') {
+            runtimeEngineRef.stopAllAccounts();
+        }
+    }
+    catch (err: any) {
+        mainLogger.warn('stop all accounts failed', { error: String(err && err.message ? err.message : err) });
+    }
+    mainLogger.info('graceful shutdown done', { elapsedMs: Date.now() - startedAt });
+    process.exit(0);
+}
+
+// worker 不需要这套：它由主进程 fork/终止，而且凭证刷新只在主进程里跑。
+if (!isWorkerProcess) {
+    process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+    process.on('SIGINT', () => { void gracefulShutdown('SIGINT'); });
 }

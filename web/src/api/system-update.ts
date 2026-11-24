@@ -71,6 +71,17 @@ export interface ReleasesSummary {
   activeBuild: number
 }
 
+/** 远端版本信息：容器/打包部署没有 git，靠读远端 version.json 比对版本号。 */
+export interface RemoteVersionInfo {
+  repo: string
+  branch: string
+  version: string
+  build: number
+  summary: string
+  commit: string
+  updatedAt: string
+}
+
 export interface SystemUpdateStatus {
   mode: 'source' | 'docker' | 'packaged' | 'unknown'
   gitSupported: boolean
@@ -104,6 +115,18 @@ export interface SystemUpdateStatus {
   releasesSummary: ReleasesSummary | null
   webBuildId: string
   webVersion: string
+
+  /** 本地版本（仓库根 version.json，容器里同样存在）。 */
+  localVersion: string
+  localBuild: number
+  /** 远端版本；没查过时为 null。 */
+  remoteVersion: RemoteVersionInfo | null
+  /** 远端确实比本地新（按 build 号优先比较）。 */
+  hasNewVersion: boolean
+  remoteCheckedAt: number | null
+  remoteCheckError: string
+  /** 容器部署时给用户在宿主机执行的命令；其它模式为空串。 */
+  deployCommand: string
 }
 
 export async function fetchSystemUpdateStatus(): Promise<SystemUpdateStatus> {

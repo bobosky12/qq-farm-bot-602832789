@@ -44,6 +44,24 @@ export const useAppUpdateStore = defineStore('app-update', () => {
   const dirtyCount = computed(() => status.value?.dirtyFiles?.length || 0)
 
   /**
+   * 容器部署：版本由镜像决定，更新只能在宿主机重建。
+   * 面板要按这套语义换一套说法，而不是继续展示 git 部署的「落后几个提交」。
+   */
+  const isDocker = computed(() => status.value?.mode === 'docker')
+  const canCheck = computed(() => Boolean(status.value?.canCheck) && !acting.value && !jobRunning.value)
+  /** 远端确实比本地新（容器里靠它判断要不要提示重建）。 */
+  const hasNewVersion = computed(() => Boolean(status.value?.hasNewVersion))
+  const remoteInfo = computed(() => status.value?.remoteVersion || null)
+  /** 宿主机重建命令，只在容器模式下有值。 */
+  const deployCommand = computed(() => status.value?.deployCommand || '')
+  const localVersionLabel = computed(() => {
+    const info = status.value
+    if (!info?.localVersion)
+      return ''
+    return info.localBuild ? `v${info.localVersion}（第 ${info.localBuild} 次更新）` : `v${info.localVersion}`
+  })
+
+  /**
    * 服务器上的前端构建号与当前页面不一致 —— 说明页面里跑的是旧 bundle，
    * 需要提示刷新，否则用户会觉得「更新完了怎么什么都没变」。
    */
@@ -259,6 +277,12 @@ export const useAppUpdateStore = defineStore('app-update', () => {
     hasIncoming,
     dirtyCount,
     stalePanel,
+    isDocker,
+    canCheck,
+    hasNewVersion,
+    remoteInfo,
+    deployCommand,
+    localVersionLabel,
     canApply,
     canRollback,
     selfBuildId,

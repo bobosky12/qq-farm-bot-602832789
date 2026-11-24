@@ -51,6 +51,26 @@ export interface PanelUpdateJobState {
     recentLines: string[];
 }
 
+/**
+ * 远端版本信息：**不依赖 git** 的检查通道。
+ *
+ * 容器里既没有 `.git` 也没有 git 命令，`git fetch` 那条路彻底走不通，但「有没有新版本」
+ * 这件事仍然可以回答——直接读远端仓库的 `version.json` 比版本号即可。这样 NAS 用户
+ * 在面板上至少能看到「远端已经是 v3.36.3」，再去宿主机重建镜像，而不是对着一句
+ * 「没有找到 git 仓库（/app）」猜。
+ */
+export interface RemoteVersionInfo {
+    /** 远端仓库坐标 owner/repo，仅用于展示与诊断。 */
+    repo: string;
+    branch: string;
+    version: string;
+    build: number;
+    summary: string;
+    commit: string;
+    /** 远端 version.json 的 updatedAt（ISO 字符串原样透传）。 */
+    updatedAt: string;
+}
+
 export interface SystemUpdateStatus {
     mode: 'source' | 'docker' | 'packaged' | 'unknown';
     gitSupported: boolean;
@@ -84,6 +104,18 @@ export interface SystemUpdateStatus {
     releasesSummary: ReleasesSummary;
     webBuildId: string;
     webVersion: string;
+
+    /** 本地版本（读仓库根的 version.json，容器里同样存在）。 */
+    localVersion: string;
+    localBuild: number;
+    /** 远端版本；未查过时为 null。 */
+    remoteVersion: RemoteVersionInfo | null;
+    /** 远端版本与本地不一致（按 build 号比较，build 相同再比版本号字符串）。 */
+    hasNewVersion: boolean;
+    remoteCheckedAt: number | null;
+    remoteCheckError: string;
+    /** 容器部署时给用户在宿主机执行的命令，前端直接展示成可复制文本。 */
+    deployCommand: string;
 }
 
 export interface SystemUpdateServiceOptions {
@@ -94,6 +126,20 @@ export interface SystemUpdateServiceOptions {
     spawnRunner?: typeof spawn;
     execGit?: (cwd: string, args: string[]) => Promise<string>;
     now?: () => number;
+    /** 远端版本检查用的 fetch，测试时注入假实现。 */
+    fetchImpl?: typeof fetch;
+    /** 远端仓库坐标 owner/repo；默认从 package.json 的 repository 解析。 */
+    remoteRepo?: string;
+    /** 远端分支，默认 main。 */
+    remoteBranch?: string;
+    /**
+     * 强制运行模式。
+     *
+     * 不传时按 `process.pkg` 与 `/.dockerenv` 自动判定。留这个口子主要是为了测试——
+     * 容器模式的分支逻辑（文案、能否检查、部署命令）跟真实文件系统无关，不该非得
+     * 跑进容器才能验证；顺手也给特殊部署留了覆盖手段。
+     */
+    mode?: SystemUpdateStatus['mode'];
 }
 
 const JOB_FILENAME = 'update-job.json';
@@ -206,6 +252,86 @@ function parsePorcelain(stdout: string): string[] {
         .slice(0, 50);
 }
 
+const VERSION_FILENAME = 'version.json';
+const DEFAULT_REMOTE_BRANCH = 'main';
+/** 容器重建命令：前端直接展示成可复制文本，用户贴到宿主机项目目录下就能用。 */
+const DOCKER_DEPLOY_COMMAND = 'git pull --ff-only && docker compose up -d --build';
+
+/**
+ * 把各种写法的仓库地址收敛成 `owner/repo`。
+ *
+ * 支持 `owner/repo`、`https://github.com/owner/repo(.git)`、`git@github.com:owner/repo`、
+ * `ssh://git@host/owner/repo`。解析不出来返回空串——调用方会用默认值兜底，而不是抛错。
+ */
+function normalizeRepoSlug(input: unknown): string {
+    const raw = String(input || '').trim()
+        .replace(/^git\+/, '')
+        .replace(/\.git$/i, '')
+        .replace(/\/+$/, '');
+    if (!raw) return '';
+    const matched = /(?:^|[/@:])([\w.-]+)\/([\w.-]+)$/.exec(raw);
+    if (!matched) return '';
+    return `${matched[1]}/${matched[2]}`;
+}
+
+/**
+ * 远端仓库坐标：环境变量 > package.json 的 repository > 内置默认值。
+ *
+ * 容器里没有 `.git`，所以读不到 origin 地址；`package.json` 是被打进镜像的
+ * （Dockerfile 的 prod-deps 阶段会 COPY 根 package.json），因此这条兜底在
+ * 源码部署和容器部署下都成立。
+ */
+function resolveRemoteRepo(repoRoot: string, explicit?: string): string {
+    const fromOptions = normalizeRepoSlug(explicit);
+    if (fromOptions) return fromOptions;
+    const fromEnv = normalizeRepoSlug(process.env.FARM_UPDATE_REPO);
+    if (fromEnv) return fromEnv;
+    for (const relative of ['package.json', path.join('core', 'package.json')]) {
+        const data: any = layout.readJsonSafe(path.join(repoRoot, relative), null);
+        const repository = data && typeof data === 'object' ? data.repository : null;
+        const url = typeof repository === 'string'
+            ? repository
+            : (repository && typeof repository === 'object' ? repository.url : '');
+        const slug = normalizeRepoSlug(url);
+        if (slug) return slug;
+    }
+    return '';
+}
+
+/** 本地版本：读仓库根的 version.json（容器里同样存在，web 构建与面板版本都用它）。 */
+function readLocalVersion(repoRoot: string): { version: string, build: number } {
+    const data: any = layout.readJsonSafe(path.join(repoRoot, VERSION_FILENAME), {}) || {};
+    return {
+        version: String(data.version || '').trim(),
+        build: Number(data.build) || 0,
+    };
+}
+
+/**
+ * 远端是否更新。
+ *
+ * 先比 `build`（单调递增的次数，最可靠），再退到语义化版本字符串比较——
+ * 只比字符串的话 `3.9.0` 会被判成比 `3.10.0` 新。
+ */
+function isRemoteNewer(remote: { version: string, build: number }, local: { version: string, build: number }): boolean {
+    if (!remote.version && !remote.build) return false;
+    if (remote.build && local.build && remote.build !== local.build) return remote.build > local.build;
+    if (!remote.version || remote.version === local.version) return false;
+    if (!local.version) return true;
+    const parse = (value: string) => String(value)
+        .replace(/^v/i, '')
+        .split('.')
+        .map((part) => Number(part) || 0);
+    const a = parse(remote.version);
+    const b = parse(local.version);
+    for (let i = 0; i < Math.max(a.length, b.length); i += 1) {
+        const x = a[i] || 0;
+        const y = b[i] || 0;
+        if (x !== y) return x > y;
+    }
+    return false;
+}
+
 function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
     const now = options.now || Date.now;
     const execGit = options.execGit || defaultExecGit;
@@ -218,12 +344,20 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         : layout.resolveRepoRoot(appRoot);
     const runtimeDir = layout.resolveRuntimeDir(repoRoot, options.runtimeDir);
     const releasesDir = layout.resolveReleasesDir(repoRoot, options.releasesDir);
+    const remoteRepo = resolveRemoteRepo(repoRoot, options.remoteRepo);
+    const remoteBranch = String(options.remoteBranch || process.env.FARM_UPDATE_BRANCH || DEFAULT_REMOTE_BRANCH).trim()
+        || DEFAULT_REMOTE_BRANCH;
+    // Node 20 自带全局 fetch；允许注入是为了测试里不打真实网络。
+    const fetchImpl: typeof fetch = options.fetchImpl || ((...args: Parameters<typeof fetch>) => fetch(...args));
 
     let startupCommit = '';
     let startupCommitReady = false;
     let lastCheckedAt: number | null = null;
     let lastCheckError = '';
     let lastPulledAt: number | null = null;
+    let remoteVersion: RemoteVersionInfo | null = null;
+    let remoteCheckedAt: number | null = null;
+    let remoteCheckError = '';
     let opChain: Promise<any> = Promise.resolve();
 
     /** 串行化「检查/拉取/发起更新」这类会互相踩的操作，避免并发点两次。 */
@@ -246,9 +380,9 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
     }
 
     async function detectEnv() {
-        const mode: SystemUpdateStatus['mode'] = isPackaged
-            ? 'packaged'
-            : (fs.existsSync('/.dockerenv') ? 'docker' : 'source');
+        const mode: SystemUpdateStatus['mode'] = options.mode
+            ? options.mode
+            : (isPackaged ? 'packaged' : (fs.existsSync('/.dockerenv') ? 'docker' : 'source'));
         // 真正拉起的是 core/runtime/runner/ 下的稳定副本，不是工作树里的 tools/farm-release.mjs：
         // 回滚会 git reset，工作树里的执行器可能正在被删掉（详见 release-layout 的说明）。
         layout.installStableRunner(repoRoot);
@@ -258,6 +392,14 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
 
         if (mode === 'packaged') {
             unsupportedReason = '当前是打包运行（单文件可执行），不包含 git 仓库，无法在线更新。';
+        }
+        else if (mode === 'docker') {
+            // 容器里没有 `.git`、没有 git 命令、也没有更新执行器——这三件事都是镜像结构决定的，
+            // 不是「部署坏了」。所以先按容器语义给出能执行的指引，不再把源码部署的诊断搬过来：
+            // 否则 NAS 用户会看到「没有找到 git 仓库（/app）」「缺少更新执行器」，两头都无从下手，
+            // 而真正该做的事（宿主机重建镜像）一个字都没提。
+            unsupportedReason = '当前运行在 Docker 容器内：版本由镜像决定，容器内不提供 git 更新。'
+                + `请在宿主机项目目录执行 ${DOCKER_DEPLOY_COMMAND} 重建容器。`;
         }
         else if (!fs.existsSync(path.join(repoRoot, '.git'))) {
             unsupportedReason = `没有找到 git 仓库（${repoRoot}），无法在线更新。`;
@@ -274,12 +416,13 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             }
         }
 
-        if (!fs.existsSync(runnerPath)) {
-            applyUnsupportedReason = '缺少更新执行器（tools/farm-release.mjs），拉取代码后需要手动重启服务。';
+        if (mode === 'docker') {
+            // 容器内重启进程只会把容器打死，代码改动也随容器重建消失；更新只能发生在宿主机。
+            // 这里不再去看执行器是否存在——那属于源码部署的判定，放在容器语境里只会误导。
+            applyUnsupportedReason = `容器内部无法重启自身，也不该在容器里改代码：请在宿主机项目目录执行 ${DOCKER_DEPLOY_COMMAND}。`;
         }
-        else if (mode === 'docker') {
-            // 容器里重启进程等于把容器打死，交给编排层重建镜像更合理。
-            applyUnsupportedReason = 'Docker 容器内不支持在面板里重启自身，请拉取后重建容器。';
+        else if (!fs.existsSync(runnerPath)) {
+            applyUnsupportedReason = '缺少更新执行器（tools/farm-release.mjs），拉取代码后需要手动重启服务。';
         }
 
         return {
@@ -293,6 +436,78 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             applyUnsupportedReason,
             runnerPath,
         };
+    }
+
+    /**
+     * 不依赖 git 的远端版本检查：直接读远端仓库的 `version.json` 比版本号。
+     *
+     * 这条通道专门服务容器/打包部署——它们没有 `.git`，但「远端有没有新版本」这个问题
+     * 仍然有答案。刻意不抛错：网络不通时返回带 `remoteCheckError` 的状态，
+     * 让面板显示「检查失败：原因」，而不是弹一个看不懂的 400。
+     */
+    async function fetchRemoteVersion(): Promise<RemoteVersionInfo> {
+        if (!remoteRepo) {
+            throw new Error('未配置远端仓库坐标（可设置 FARM_UPDATE_REPO=owner/repo）');
+        }
+        const url = `https://api.github.com/repos/${remoteRepo}/contents/${VERSION_FILENAME}`
+            + `?ref=${encodeURIComponent(remoteBranch)}`;
+        const headers: Record<string, string> = {
+            // raw 直接返回文件正文，省掉 base64 解码与「是不是 API 包装」的分支。
+            'Accept': 'application/vnd.github.raw',
+            'User-Agent': 'qq-farm-bot-updater',
+        };
+        const token = String(process.env.FARM_UPDATE_TOKEN || '').trim();
+        if (token) headers.Authorization = `Bearer ${token}`;
+
+        const res = await fetchImpl(url, { headers, signal: AbortSignal.timeout(15000) });
+        if (!res.ok) {
+            const hint = res.status === 404
+                ? `远端仓库或分支不存在（${remoteRepo}@${remoteBranch}）`
+                : res.status === 403
+                    ? '接口限流或无权访问（可设置 FARM_UPDATE_TOKEN 提高额度）'
+                    : `HTTP ${res.status}`;
+            throw new Error(hint);
+        }
+        const text = await res.text();
+        let parsed: any;
+        try {
+            parsed = JSON.parse(text);
+        }
+        catch {
+            throw new Error('远端 version.json 不是合法 JSON');
+        }
+        // 带 Accept: raw 时是文件正文；万一被代理改写回 API 包装，这里兼容一下。
+        if (parsed && typeof parsed === 'object' && typeof parsed.content === 'string' && parsed.encoding === 'base64') {
+            parsed = JSON.parse(Buffer.from(parsed.content, 'base64').toString('utf8'));
+        }
+        const version = String(parsed?.version || '').trim();
+        const build = Number(parsed?.build) || 0;
+        if (!version && !build) throw new Error('远端 version.json 缺少版本号');
+        const head = Array.isArray(parsed?.history) ? parsed.history[0] : null;
+        return {
+            repo: remoteRepo,
+            branch: remoteBranch,
+            version,
+            build,
+            summary: String(head?.summary || '').trim(),
+            commit: String(head?.commit || '').trim(),
+            updatedAt: String(parsed?.updatedAt || '').trim(),
+        };
+    }
+
+    async function checkRemoteVersion(): Promise<SystemUpdateStatus> {
+        try {
+            remoteVersion = await fetchRemoteVersion();
+            remoteCheckError = '';
+        }
+        catch (err: any) {
+            remoteVersion = null;
+            remoteCheckError = String(err?.message || err || '检查远端版本失败');
+        }
+        remoteCheckedAt = now();
+        lastCheckedAt = remoteCheckedAt;
+        lastCheckError = remoteCheckError;
+        return getStatus();
     }
 
     async function inspectRepoLocal() {
@@ -392,6 +607,7 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         const job = readJobStateResolved(runtimeDir);
         const jobBusy = Boolean(job && job.status === 'running') || isDeployLockAlive(runtimeDir);
         const webInfo = webBuildInfo.readWebBuildInfo(repoRoot);
+        const local = readLocalVersion(repoRoot);
 
         const base: SystemUpdateStatus = {
             mode: envInfo.mode,
@@ -414,7 +630,9 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             aheadCount: 0,
             dirtyFiles: [],
             incomingCommits: [],
-            canCheck: false,
+            // 「能检查」不再等同于「能 git fetch」：容器与打包部署走远端 version.json 那条通道，
+            // 照样能回答「有没有新版本」。能不能拉取/应用仍然是 git 部署独有的。
+            canCheck: !envInfo.gitSupported,
             canPull: false,
             canApply: false,
             jobBusy,
@@ -426,6 +644,13 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
             releasesSummary: snapshot.summary,
             webBuildId: webInfo?.buildId || '',
             webVersion: webInfo?.appVersion || snapshot.summary.activeVersion,
+            localVersion: local.version,
+            localBuild: local.build,
+            remoteVersion,
+            hasNewVersion: remoteVersion ? isRemoteNewer(remoteVersion, local) : false,
+            remoteCheckedAt,
+            remoteCheckError,
+            deployCommand: envInfo.mode === 'docker' ? DOCKER_DEPLOY_COMMAND : '',
         };
 
         if (!envInfo.gitSupported) return base;
@@ -470,7 +695,19 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         return getStatus();
     }
 
-    const checkForUpdates = () => withOpMutex(runCheckUnlocked);
+    /**
+     * 检查更新。
+     *
+     * 两条通道由运行方式决定，前端只管点按钮：
+     *   - 有 git（源码部署）：`git fetch` 后比对本地与上游的提交数与提交列表；
+     *   - 没有 git（容器/打包）：读远端仓库的 `version.json` 比版本号，至少能回答
+     *     「远端是不是已经有新版本」，而不是把「没有 git 仓库」当成检查失败。
+     */
+    const checkForUpdates = () => withOpMutex(async () => {
+        const envInfo = await detectEnv();
+        if (!envInfo.gitSupported) return checkRemoteVersion();
+        return runCheckUnlocked();
+    });
 
     const pullUpdates = () => withOpMutex(async () => {
         const envInfo = await detectEnv();
@@ -749,9 +986,12 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         repoRoot,
         runtimeDir,
         releasesDir,
+        remoteRepo,
+        remoteBranch,
         detectEnv,
         getStatus,
         checkForUpdates,
+        checkRemoteVersion,
         pullUpdates,
         applyUpdate,
         rollback,

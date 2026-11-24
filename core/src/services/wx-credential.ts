@@ -62,19 +62,61 @@ function hasRenewableCredential(account: any): boolean {
  * 串行后第二个任务会在第一个结束后重新读取账号，拿到的是最新 token。
  */
 const accountLocks = new Map<string, Promise<void>>();
+
+/**
+ * 全局在途凭证操作计数。
+ *
+ * 停服时要等它归零：refreshtoken 是「刷新即作废旧值」，服务端已经换新、本地还没写盘的
+ * 那一瞬间被 SIGKILL，账号里就永久留下一个死 token，之后每次启动都是 -109，只能重新扫码。
+ * 容器里这个窗口特别容易踩——node 当 PID 1、docker stop 默认等 10 秒后强杀。
+ */
+let credentialInFlight = 0;
+
 async function withAccountCredentialLock<T>(accountId: unknown, task: () => Promise<T>): Promise<T> {
     const key = String(accountId || '');
     const previous = accountLocks.get(key);
     let release!: () => void;
     const current = new Promise<void>((resolve) => { release = resolve; });
     accountLocks.set(key, current);
-    if (previous) await previous.catch(() => {});
+    credentialInFlight += 1;
     try {
+        if (previous) await previous.catch(() => {});
         return await task();
     } finally {
+        credentialInFlight = Math.max(0, credentialInFlight - 1);
         release();
         if (accountLocks.get(key) === current) accountLocks.delete(key);
     }
+}
+
+/**
+ * 等所有在途凭证操作结束（或到超时）。
+ *
+ * 返回 true 表示已经干净收尾；false 表示宽限期用完还有请求在飞——调用方照样该退出，
+ * 但要记一条日志，方便事后对账「这次停服是不是又踩到写盘窗口」。
+ */
+function waitForCredentialIdle(timeoutMs = 5000): Promise<boolean> {
+    const limit = Math.max(0, Number(timeoutMs) || 0);
+    const deadline = Date.now() + limit;
+    return new Promise((resolve) => {
+        const tick = () => {
+            if (credentialInFlight === 0) {
+                resolve(true);
+                return;
+            }
+            if (Date.now() >= deadline) {
+                resolve(false);
+                return;
+            }
+            setTimeout(tick, 50);
+        };
+        tick();
+    });
+}
+
+/** 当前有几个凭证操作在飞（诊断用）。 */
+function credentialBusyCount(): number {
+    return credentialInFlight;
 }
 
 function getAccountById(accountId: unknown): any {
@@ -359,4 +401,6 @@ module.exports = {
     refreshAccountCredential,
     renewOAuthToken,
     ensureFreshGameCode,
+    waitForCredentialIdle,
+    credentialBusyCount,
 };

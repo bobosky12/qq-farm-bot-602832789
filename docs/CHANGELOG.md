@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.36.3 | #256 | 2026-11-24 | Docker 部署：更新指引改对，重启后自动登录修复 | — |
 | v3.36.2 | #255 | 2026-11-24 | 同步上游 #185：好友牧场一键帮忙生产 | — |
 | v3.36.1 | #253 | 2026-11-24 | 牧场资产换便便并显示本次增量，农场首页日志卡片定高 | — |
 | v3.36.0 | #252 | 2026-11-24 | 同步上游 #184：新增统一日志组件与二级模块筛选 | — |
@@ -244,6 +245,40 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-24 · v3.36.3（#256） · Docker 部署：更新指引改对，重启后自动登录修复
+
+来自 NAS 容器部署的三条反馈，背后是两组问题：更新页面把「源码部署的诊断」原样搬进了容器语境；自动登录则被容器停服的 SIGKILL 打断，越重启越坏。
+
+**一、容器里的「版本与更新」说人话**
+
+容器镜像只装运行产物——没有 `.git`、没有 git 命令、也没有 `tools/farm-release.mjs`。`detectEnv` 原来先判 `.git` 再判执行器，于是面板上出现两句对容器毫无意义的话：「没有找到 git 仓库（/app）」和「缺少更新执行器，拉取代码后需要手动重启服务」。前一句把用户指向一个容器里根本不存在的仓库，后一句暗示「补个文件就行」，而真正该做的是在宿主机重建镜像。
+
+- `detectEnv` 改为容器优先判定：`mode === 'docker'` 直接给出 `Docker 容器内：版本由镜像决定，容器内不提供 git 更新`，并附上宿主机命令；执行器存在性检查只对源码部署生效，不再污染容器语境。
+- 新增**不依赖 git 的版本检查通道**：读远端仓库的 `version.json`（`Accept: application/vnd.github.raw`，省掉 base64 解码），比 `build` 号为主、语义化版本兜底。`build` 是单调递增的更新序号，比字符串可靠——按字符串比 `3.9.0` 会被判成比 `3.10.0` 新。
+- `canCheck` 的语义从「能 git fetch」放宽为「能回答有没有新版本」，容器与打包部署因此也能用「检查更新」；`canPull` / `canApply` 仍只属于 git 部署。
+- 远端仓库坐标三级兜底：`FARM_UPDATE_REPO` → `package.json` 的 `repository` → 空（面板提示去配环境变量）。容器里读不到 origin，`package.json` 是被打进镜像的，所以这条链在两种部署下都成立。分支默认 `main`，可用 `FARM_UPDATE_BRANCH` 覆盖。
+- 检查失败不抛错：网络不通、仓库 404、接口限流都收敛成 `remoteCheckError` 一句话，面板显示「检查远端版本失败：原因」，而不是一个 400。
+- 前端：容器模式隐藏「立即更新」，换成「在宿主机更新」区块——命令可一键复制（`clipboard` 不可用时退回 `execCommand`），并说明数据在命名卷里、不要加 `-v`。顺带修了一个老问题：容器里没有 `releases/` 归档，`summary.activeVersion` 为空，页面顶部的版本号一直显示「未知」；现在优先读 `version.json` 的 `localVersion`。
+
+**二、重启后不能自动登录：三层原因**
+
+第一层是容器停服的硬伤。`CMD ["node", "client.js"]` 让 node 直接当 PID 1，而 Linux 内核对 PID 1 的**默认动作**信号处理是忽略——没有注册 handler 时 SIGTERM 不生效，`docker stop` 等完 10 秒宽限期一律 SIGKILL。这一刀正好会切断「服务端已把旧 `refreshtoken` 作废、新值还没落盘」的窗口，账号里永久留下一个死 token，之后每次启动都是 `-109 RC_PARAMS_INVALID`，只能重新扫码。
+
+- `core/client.ts` 显式接管 `SIGTERM` / `SIGINT`：先 `waitForCredentialIdle(5000)` 等在途凭证操作收尾，再 `stopAllAccounts()`，最后正常退出。注册 handler 之后内核会正常投递信号，PID 1 身份不再是障碍。
+- `wx-credential` 增加在途计数（`credentialInFlight`、`credentialBusyCount`、`waitForCredentialIdle`）。停服时若宽限期内没排空，会记一条 warn 便于事后对账，但照样退出——不能把 `docker stop` 拖到超时。
+- `docker-compose.yml` 加 `init: true`：tini 当 PID 1，worker 子进程被回收后有 init 收尸，不再堆僵尸。它和信号钩子分工不同，缺一不可。
+
+第二层是启动期的兜底空窗。保活（`startAccountKeepAlive`）原来排在自动登录**之后**，而启动批次的账号恰恰最脆弱——容器刚起来 DNS/网络可能还没就绪。这批掉线落在「保活依赖还没注入」的空窗里，`wx-keepalive` 的 `log()` 在依赖缺失时是静默 no-op，连一条「N 秒后自动重登」都不会留下，账号就此停住。
+
+- `start()` 里把 `startAccountKeepAlive()` 提到 `startAllAccounts()` 之前，掉线即有人兜。
+
+第三层是「换码失败就拿旧 Code 硬连」。`accounts.json` 里的 `code` 是一次性的、上次运行已消费；换码失败后仍拿它建连，网关 1.2 秒就回 400，而面板已提前写了「已随服务启动自动登录」，日志看起来像「登录成功后又掉线」。
+
+- `data-provider.startAccount`：`result.needsRescan`（`-109` / ticket 被拒 / 凭证吊销）时不再硬连，直接把账号标成 `offline` 并写明「需要重新扫码登录」，返回 `false`。临时失败（网络抖动）仍保留回退旧 Code 的行为——真失效了还有保活按退避重登。
+- 自动登录日志改为「已发起自动登录，等待连接结果」；`startAccount` 返回 `false` 时记错误而不是成功。
+
+**验证**：core **1045** 条（新增 6 条容器模式与远端检查、6 条停服与启动顺序、2 条换码失败分支）、web **347** 条全绿；`tsc`、`vue-tsc` 通过；两侧 eslint 无告警。
 
 ### 2026-11-24 · v3.36.2（#255） · 同步上游 #185：好友牧场一键帮忙生产
 
