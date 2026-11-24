@@ -577,6 +577,69 @@ test('启动脚本与忽略规则：运行时目录不能污染工作区', () =>
     assert.match(gitignore, /^core\/runtime\/$/m, 'core/runtime/ 必须忽略');
 });
 
+test('执行器有稳定副本：回滚到没有 tools/farm-release.mjs 的旧版本也删不掉它', () => {
+    const root = makeFakeRepo();
+    try {
+        // 真实仓库里执行器依赖这份布局实现，副本要把它一起搬过去。
+        const layoutSource = path.join(root, 'core', 'src', 'services', 'release-layout.js');
+        fs.mkdirSync(path.dirname(layoutSource), { recursive: true });
+        fs.writeFileSync(layoutSource, '// layout stub\n', 'utf8');
+
+        const first = layout.installStableRunner(root);
+        assert.equal(first.installed, true);
+        assert.equal(first.updated, true, '首次安装必须写盘');
+        assert.equal(first.runnerPath, path.join(root, 'core', 'runtime', 'runner', 'farm-release.mjs'));
+        assert.ok(fs.existsSync(first.runnerPath), '副本要落在 core/runtime/runner 下');
+        assert.ok(fs.existsSync(first.layoutPath), '布局实现要跟着搬，执行器才能完全脱离工作树');
+        assert.equal(layout.locateRunner(root), first.runnerPath, '有副本时优先用副本');
+
+        // 内容没变就不重写，避免每次拉起都把 mtime 刷掉。
+        const second = layout.installStableRunner(root);
+        assert.equal(second.installed, true);
+        assert.equal(second.updated, false);
+
+        // 模拟回滚：git reset 到还没有执行器的旧提交，tools/ 下的源码整目录消失。
+        fs.rmSync(path.join(root, 'tools'), { recursive: true, force: true });
+        const third = layout.installStableRunner(root);
+        assert.equal(third.installed, false, '源码没了要如实报告，但不能抛错');
+        assert.match(third.reason, /farm-release\.mjs/);
+        assert.ok(fs.existsSync(first.runnerPath), '副本必须还在');
+        assert.equal(layout.locateRunner(root), first.runnerPath);
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
+test('执行器先自举到稳定目录再干活，避免回滚时把自己删掉', () => {
+    const runner = read('tools/farm-release.mjs');
+    assert.match(runner, /installStableRunner\(/, '干活之前必须先安装稳定副本');
+    assert.match(runner, /STABLE_MARK/, '要有递归保护标记，否则会不断重启自己');
+
+    const bootstrapAt = runner.indexOf('await ensureRunningFromStableCopy()');
+    const jobAt = runner.indexOf('const currentJob = readJob()');
+    assert.ok(bootstrapAt > 0, '必须真的调用自举');
+    assert.ok(bootstrapAt < jobAt, '自举要早于读作业状态，否则父进程会先写脏作业状态再退出');
+});
+
+test('后端拉起的是稳定副本，不是工作树里的执行器', () => {
+    const service = read('core/src/services/system-update.ts');
+    assert.match(service, /layout\.installStableRunner\(/, '拉起前刷新副本');
+    assert.match(service, /layout\.locateRunner\(/, '拉起路径必须走 locateRunner');
+});
+
+test('重启成功的判据是接口能答话，而不是 pid 还活着', () => {
+    const runner = read('tools/farm-release.mjs');
+    assert.match(runner, /\/api\/game-version/, '必须探测这个接口：它不需要鉴权，还带运行版本号');
+    assert.match(runner, /async function probeService/);
+    assert.match(runner, /shellAlive/, 'Windows 上 pid 文件里是 MSYS pid，必须交给 shell 再判一次');
+    assert.match(
+        runner,
+        /if \(shell && isAlive\(recorded\)/,
+        'pid 文件里有活进程就走 stop.sh，不能要求它与调用方 pid 相等（会退化成只杀父进程）',
+    );
+});
+
 test('路由挂载：接口挂在管理端鉴权之后', () => {
     const routes = read('core/src/controllers/admin/system-update-routes.ts');
     assert.match(routes, /app\.use\('\/api\/system-update', createAuthRequired\(ctx\)\)/, '必须先过鉴权');

@@ -99,7 +99,6 @@ export interface SystemUpdateServiceOptions {
 const JOB_FILENAME = 'update-job.json';
 const JOB_LOG_FILENAME = 'update-job.log';
 const LOCK_FILENAME = 'update.lock';
-const RUNNER_RELATIVE = path.join('tools', 'farm-release.mjs');
 const MAX_RECENT_LINES = 40;
 
 function createUpdateError(message: string, statusCode = 400, code = 'SYSTEM_UPDATE_ERROR'): Error {
@@ -250,7 +249,10 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         const mode: SystemUpdateStatus['mode'] = isPackaged
             ? 'packaged'
             : (fs.existsSync('/.dockerenv') ? 'docker' : 'source');
-        const runnerPath = path.join(repoRoot, RUNNER_RELATIVE);
+        // 真正拉起的是 core/runtime/runner/ 下的稳定副本，不是工作树里的 tools/farm-release.mjs：
+        // 回滚会 git reset，工作树里的执行器可能正在被删掉（详见 release-layout 的说明）。
+        layout.installStableRunner(repoRoot);
+        const runnerPath = layout.locateRunner(repoRoot);
         let unsupportedReason = '';
         let applyUnsupportedReason = '';
 
@@ -273,7 +275,7 @@ function createSystemUpdateService(options: SystemUpdateServiceOptions = {}) {
         }
 
         if (!fs.existsSync(runnerPath)) {
-            applyUnsupportedReason = '缺少 tools/farm-release.mjs，拉取代码后需要手动重启服务。';
+            applyUnsupportedReason = '缺少更新执行器（tools/farm-release.mjs），拉取代码后需要手动重启服务。';
         }
         else if (mode === 'docker') {
             // 容器里重启进程等于把容器打死，交给编排层重建镜像更合理。

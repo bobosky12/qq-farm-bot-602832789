@@ -26,14 +26,83 @@ import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = path.resolve(process.env.FARM_REPO_ROOT || path.join(HERE, '..'));
-const layout = require(path.join(REPO_ROOT, 'core', 'src', 'services', 'release-layout.js'));
+const SELF_PATH = fileURLToPath(import.meta.url);
+
+/**
+ * 仓库根：从自身位置往上找同时具备 `.git` 与 `version.json` 的目录。
+ *
+ * 不能简单写成 `HERE/..`——执行器平时跑在 `core/runtime/runner/` 的稳定副本里，
+ * 往上两级是 `core/`，不是仓库根。
+ */
+function findRepoRoot(startDir) {
+    const explicit = process.env.FARM_REPO_ROOT;
+    if (explicit && fs.existsSync(explicit)) return path.resolve(explicit);
+
+    let cursor = path.resolve(startDir);
+    for (let depth = 0; depth < 6; depth += 1) {
+        if (fs.existsSync(path.join(cursor, '.git')) && fs.existsSync(path.join(cursor, 'version.json'))) return cursor;
+        const parent = path.dirname(cursor);
+        if (parent === cursor) break;
+        cursor = parent;
+    }
+    return path.resolve(startDir, '..');
+}
+
+const REPO_ROOT = findRepoRoot(HERE);
+
+/** 布局实现：稳定目录里和自己并排放着一份，没有才回退到工作树源码。 */
+function loadLayout() {
+    const sibling = path.join(HERE, 'release-layout.js');
+    if (fs.existsSync(sibling)) return require(sibling);
+    return require(path.join(REPO_ROOT, 'core', 'src', 'services', 'release-layout.js'));
+}
+
+const layout = loadLayout();
 
 const JOB_FILE = process.env.FARM_UPDATE_JOB_FILE || path.join(layout.resolveRuntimeDir(REPO_ROOT), 'update-job.json');
-const LOG_FILE = path.join(path.dirname(JOB_FILE), 'update-job.log');
 const MAX_RECENT_LINES = 40;
 const COMMAND_TIMEOUT_MS = 10 * 60 * 1000;
 const RELEASES_KEEP = Math.max(1, Number(process.env.FARM_RELEASES_KEEP) || 3);
+const ADMIN_PORT = Number(process.env.ADMIN_PORT) || 3007;
+/** 等新服务答话的上限。首启动要跑一遍宿主与账号初始化，给足 2 分钟。 */
+const SERVICE_PROBE_TIMEOUT_MS = 120000;
+const STABLE_MARK = 'FARM_RUNNER_STABLE';
+
+// ==================== 自我保全 ====================
+
+/**
+ * 干活之前先把自己搬到不受 git 影响的位置。
+ *
+ * 回滚会 `git reset --hard` 到旧提交；如果那个提交里还没有 `tools/farm-release.mjs`
+ * （例如回滚到本功能上线之前的版本），执行器会把自己从磁盘上删掉，剩下的启动步骤就没人做了。
+ * 实测踩过：`git reset` 之后下一次调用直接 `Cannot find module ...tools/farm-release.mjs`。
+ *
+ * 所以先把执行器与 `release-layout.js` 复制到 `core/runtime/runner/`（已被 `.gitignore`
+ * 忽略，`git reset` / `git pull` 都不碰），再从副本重跑一次，然后由副本完成全部工作。
+ * 后端拉起时直接用的就是副本路径，这里会判定「已经在副本里」而不再重跑。
+ */
+async function ensureRunningFromStableCopy() {
+    if (process.env[STABLE_MARK] === '1') return false;
+
+    const stable = layout.installStableRunner(REPO_ROOT);
+    if (!stable.installed || !fs.existsSync(stable.runnerPath)) return false;
+    if (path.resolve(stable.runnerPath) === path.resolve(SELF_PATH)) return false;
+
+    console.log(`[自举] 改用稳定副本执行：${path.relative(REPO_ROOT, stable.runnerPath)}`);
+    const child = spawn(process.execPath, [stable.runnerPath, ...process.argv.slice(2)], {
+        cwd: REPO_ROOT,
+        env: { ...process.env, [STABLE_MARK]: '1', FARM_REPO_ROOT: REPO_ROOT },
+        stdio: 'inherit',
+        windowsHide: true,
+    });
+    const code = await new Promise((resolve) => {
+        child.once('error', () => resolve(1));
+        child.once('close', (exitCode) => resolve(exitCode === null ? 1 : exitCode));
+    });
+    process.exit(code);
+}
+
+await ensureRunningFromStableCopy();
 
 // ==================== 作业状态 ====================
 
@@ -172,14 +241,43 @@ function gitSync(args) {
     }
 }
 
+/** 探测到的 shell，检测一次就缓存：`isAlive` 是同步函数，没有 await 的机会。 */
+let cachedShell = '';
+
 async function detectShell() {
+    if (cachedShell) return cachedShell;
     const probeCmd = process.platform === 'win32' ? 'where' : 'which';
     const candidates = process.platform === 'win32' ? ['bash.exe', 'bash'] : ['bash', 'sh'];
     for (const candidate of candidates) {
         const probe = await runCommand(probeCmd, [candidate], { timeoutMs: 15000 });
-        if (probe.code === 0) return candidate;
+        if (probe.code === 0) {
+            cachedShell = candidate;
+            return candidate;
+        }
     }
     return '';
+}
+
+/**
+ * 交给 shell 再判一次存活。
+ *
+ * Windows 上 `start.sh` 用 `nohup setsid node … &` 启动，写进 `app_dev.pid` 的是 **MSYS pid**：
+ * `process.kill(msysPid, 0)` 会抛 ESRCH，而 `bash -c 'kill -0 msysPid'` 是通的。只信
+ * `process.kill` 会把活得好好的服务判成「没起来」，进而触发一次多余的回滚。
+ */
+function shellAlive(pid) {
+    const shell = cachedShell || (process.platform === 'win32' ? 'bash' : 'sh');
+    try {
+        execFileSync(shell, ['-c', `kill -0 ${Number(pid)} 2>/dev/null`], {
+            stdio: 'ignore',
+            timeout: 8000,
+            windowsHide: true,
+        });
+        return true;
+    }
+    catch {
+        return false;
+    }
 }
 
 function isAlive(pid) {
@@ -189,8 +287,10 @@ function isAlive(pid) {
         return true;
     }
     catch (err) {
-        return err?.code === 'EPERM';
+        if (err?.code === 'EPERM') return true;
     }
+    // 两个命名空间都要问：本机 pid 查不到，不代表 MSYS pid 查不到。
+    return shellAlive(pid);
 }
 
 function sleep(ms) {
@@ -201,10 +301,10 @@ function sleep(ms) {
  * 优雅停掉后端。
  *
  * 两条路径，优先走第一条：
- *   1. `app_dev.pid` 记的就是当前后端 → 用项目自带的 `stop.sh`。它会按**进程组**整组结束，
+ *   1. `app_dev.pid` 里有一个活着的进程 → 用项目自带的 `stop.sh`。它会按**进程组**整组结束，
  *      把 client.js fork 出来的宿主子进程一起带走。只杀父进程会留下一堆孤儿宿主进程占着
  *      会话 socket，重启后新旧宿主打架，比不重启更糟。
- *   2. 没有 pid 文件（手动 `node client.js` 起的）→ 直接结束；POSIX 上再补一刀进程组。
+ *   2. pid 文件不存在（手动 `node client.js` 起的）→ 直接结束；POSIX 上再补一刀进程组。
  */
 async function stopBackend(targetPid, shell) {
     const pidFile = path.join(REPO_ROOT, 'app_dev.pid');
@@ -230,10 +330,14 @@ async function stopBackend(targetPid, shell) {
     }
     setPhase('正在停止旧服务', `PID ${pid}`);
 
-    if (shell && recorded === pid && fs.existsSync(path.join(REPO_ROOT, 'stop.sh'))) {
+    // 只要 pid 文件里有一个活着的服务，就走 stop.sh：它按**进程组**整组结束，把 client.js
+    // fork 出来的宿主子进程一起带走。只杀父进程会留下孤儿宿主占着会话 socket，重启后新旧
+    // 宿主打架，比不重启更糟。也不要卡 `recorded === pid`——Windows 上拿到的是 MSYS pid，
+    // 和 pid 文件里的值未必一致，卡这个条件会静默退化成「只杀父进程」。
+    if (shell && isAlive(recorded) && fs.existsSync(path.join(REPO_ROOT, 'stop.sh'))) {
         logLine('[停止] 使用 stop.sh 整套停止（含 fork 出来的宿主子进程）');
         const result = await runCommand(shell, ['stop.sh'], { timeoutMs: 120000 });
-        if (result.code === 0 && !isAlive(pid)) return true;
+        if (result.code === 0 && !isAlive(pid) && !isAlive(recorded)) return true;
         logLine('[停止] stop.sh 未能确认退出，回退到直接结束进程');
     }
 
@@ -385,6 +489,41 @@ function findPairedWebRelease(backendReleaseId, commit) {
 
 // ==================== 重启 ====================
 
+/**
+ * 服务能不能答话。
+ *
+ * 这才是「重启成功」的判据——pid 活着只说明进程没崩，端口可能还没监听、宿主可能正在退出。
+ * `/api/game-version` 不需要鉴权，且返回里带 `botVersion`（注意字段在顶层，不在 `data` 里）。
+ */
+async function probeService() {
+    try {
+        const response = await fetch(`http://127.0.0.1:${ADMIN_PORT}/api/game-version`, {
+            signal: AbortSignal.timeout(5000),
+        });
+        if (!response.ok) return null;
+        const body = await response.json();
+        if (!body || body.ok === false) return null;
+        return {
+            clientVersion: String(body.clientVersion || ''),
+            botVersion: String(body.botVersion || ''),
+        };
+    }
+    catch {
+        // 连不上就是还没起来，由调用方决定等多久。
+        return null;
+    }
+}
+
+async function waitForService(timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+        const probe = await probeService();
+        if (probe) return probe;
+        if (Date.now() >= deadline) return null;
+        await sleep(1000);
+    }
+}
+
 async function restartService(backendPid) {
     const shell = await detectShell();
     if (!shell) {
@@ -396,8 +535,7 @@ async function restartService(backendPid) {
     if (result.code !== 0) {
         throw new Error(`start.sh 执行失败（退出码 ${result.code}），详见日志。`);
     }
-    // start.sh 自己会做 1 秒存活校验，这里再宽一点等它稳定下来。
-    await sleep(1500);
+
     let newPid = 0;
     try {
         newPid = Number(fs.readFileSync(path.join(REPO_ROOT, 'app_dev.pid'), 'utf8').trim()) || 0;
@@ -405,10 +543,16 @@ async function restartService(backendPid) {
     catch {
         newPid = 0;
     }
-    if (!newPid || !isAlive(newPid)) {
-        throw new Error('新进程没有成功常驻，请查看 app_dev.log。');
+
+    setPhase('等待服务就绪', `探测 127.0.0.1:${ADMIN_PORT}/api/game-version`);
+    const probe = await waitForService(SERVICE_PROBE_TIMEOUT_MS);
+    if (!probe) {
+        const aliveNote = newPid && isAlive(newPid)
+            ? `进程 ${newPid} 还在，但接口 ${Math.round(SERVICE_PROBE_TIMEOUT_MS / 1000)} 秒内没有响应`
+            : `进程 ${newPid || '未知'} 已退出`;
+        throw new Error(`新服务没有就绪：${aliveNote}，请查看 app_dev.log。`);
     }
-    logLine(`[启动] 新服务已启动，PID ${newPid}`);
+    logLine(`[启动] 新服务已就绪，PID ${newPid || '未知'}，运行版本 ${probe.botVersion || '未知'}`);
     return newPid;
 }
 
@@ -616,10 +760,22 @@ async function doSnapshot() {
 async function main() {
     const args = parseArgs(process.argv.slice(2));
     const command = args._[0] || 'update';
+
+    // 上一轮的失败原因会留在作业文件里。不清掉的话这一轮成功之后，面板上会同时显示
+    // 「已完成」和上一轮的 error，看起来像「成功了但又报错」。
+    if (currentJob.status !== 'running') {
+        currentJob.status = 'running';
+        currentJob.error = undefined;
+        currentJob.finishedAt = undefined;
+        currentJob.startedAt = Date.now();
+        currentJob.recentLines = [];
+    }
     currentJob.pid = process.pid;
+    currentJob.action = command === 'rollback' || command === 'snapshot' ? command : 'update';
     writeJob(currentJob);
 
     logLine(`[启动] 执行器开始工作：${command}（PID ${process.pid}）`);
+    logLine(`[执行器] 位置 ${path.relative(REPO_ROOT, SELF_PATH) || SELF_PATH}`);
 
     let ok = false;
     if (command === 'rollback') ok = await doRollback(args);

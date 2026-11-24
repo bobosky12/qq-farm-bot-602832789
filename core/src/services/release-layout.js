@@ -67,6 +67,87 @@ function resolveRuntimeDir(repoRoot, explicit) {
     return path.join(path.resolve(repoRoot), RUNTIME_DIRNAME);
 }
 
+/**
+ * 执行器的「稳定副本」目录。
+ *
+ * 为什么需要：回滚会 `git reset --hard` 到旧提交，而 `tools/farm-release.mjs` 是某个版本才
+ * 新增的文件——退到它之前，执行器会把自己从磁盘上删掉，剩下的重启步骤就没人做了。实测踩过：
+ * `git reset` 之后下一次调用直接 `Cannot find module ...tools/farm-release.mjs`。
+ *
+ * 所以真正被拉起的是 `core/runtime/runner/` 下的副本：
+ *   - 该目录在 `.gitignore` 里，`git reset` / `git pull` / `git checkout` 都不会碰它；
+ *   - 执行器与它依赖的 `release-layout.js` 并排放在一起，连工作树里的源码都不再依赖；
+ *   - `update` 时若上游改了执行器，副本在拉起前会被刷新成新版本。
+ *
+ * 副作用是好事：万一面板自己坏了，仍然可以用
+ * `node core/runtime/runner/farm-release.mjs rollback --release <id>` 手动救回来。
+ */
+const RUNNER_DIRNAME = 'runner';
+const RUNNER_FILENAME = 'farm-release.mjs';
+const RUNNER_SOURCE = path.join('tools', RUNNER_FILENAME);
+const LAYOUT_FILENAME = 'release-layout.js';
+const LAYOUT_SOURCE = path.join('core', 'src', 'services', LAYOUT_FILENAME);
+
+function resolveRunnerDir(repoRoot) {
+    return path.join(resolveRuntimeDir(repoRoot), RUNNER_DIRNAME);
+}
+
+/** 内容不同才写，避免每次拉起都把 mtime 刷掉（mtime 一变，排查问题时看不出谁改的）。 */
+function copyFileIfChanged(source, target) {
+    const incoming = fs.readFileSync(source);
+    try {
+        if (fs.readFileSync(target).equals(incoming)) return false;
+    }
+    catch {
+        // 目标不存在或读不了，直接写。
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, incoming);
+    return true;
+}
+
+/**
+ * 把执行器与布局实现复制到稳定目录。
+ *
+ * 源码缺失时**不报错**：回滚到没有这个功能的旧版本之后，工作树里本来就没有
+ * `tools/farm-release.mjs`，但已有的副本仍然可用——这正是它存在的意义。
+ */
+function installStableRunner(repoRoot) {
+    const dir = resolveRunnerDir(repoRoot);
+    const result = {
+        runnerPath: path.join(dir, RUNNER_FILENAME),
+        layoutPath: path.join(dir, LAYOUT_FILENAME),
+        installed: false,
+        updated: false,
+        reason: '',
+    };
+
+    const runnerSource = path.join(repoRoot, RUNNER_SOURCE);
+    if (!fs.existsSync(runnerSource)) {
+        result.reason = `找不到执行器源码 ${RUNNER_SOURCE}`;
+        return result;
+    }
+    try {
+        result.updated = copyFileIfChanged(runnerSource, result.runnerPath);
+        const layoutSource = path.join(repoRoot, LAYOUT_SOURCE);
+        if (fs.existsSync(layoutSource)) {
+            result.updated = copyFileIfChanged(layoutSource, result.layoutPath) || result.updated;
+        }
+        result.installed = true;
+    }
+    catch (err) {
+        result.reason = err && err.message ? err.message : String(err);
+    }
+    return result;
+}
+
+/** 优先用稳定副本；副本还没装好（首次运行）才回退到工作树里的源码。 */
+function locateRunner(repoRoot) {
+    const stable = path.join(resolveRunnerDir(repoRoot), RUNNER_FILENAME);
+    if (fs.existsSync(stable)) return stable;
+    return path.join(path.resolve(repoRoot), RUNNER_SOURCE);
+}
+
 function pad2(value) {
     return String(value).padStart(2, '0');
 }
@@ -351,6 +432,9 @@ module.exports = {
     resolveRepoRoot,
     resolveReleasesDir,
     resolveRuntimeDir,
+    resolveRunnerDir,
+    installStableRunner,
+    locateRunner,
     formatStamp,
     buildReleaseId,
     parseReleaseId,

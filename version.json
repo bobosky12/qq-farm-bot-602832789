@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 9,
-  "build": 239,
-  "version": "3.35.9",
-  "updatedAt": "2026-11-24T04:58:07.964Z",
+  "patch": 10,
+  "build": 250,
+  "version": "3.35.10",
+  "updatedAt": "2026-11-24T05:20:29.030Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.10",
+      "build": 250,
+      "date": "2026-11-24",
+      "summary": "面板更新执行器改用稳定副本，修复回滚中断",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.9",
       "build": 239,

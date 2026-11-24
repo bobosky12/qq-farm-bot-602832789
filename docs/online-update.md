@@ -23,9 +23,19 @@
 | `release-layout.js` | `core/src/services/` | 纯 CommonJS 零依赖。归档目录命名、快照、恢复、清理、激活状态。后端与执行器**共用这一份** |
 | `release-store.ts` | `core/src/services/` | 只读查询层：后端/前端配对、与当前客户端版本的兼容性、总览统计 |
 | `system-update.ts` | `core/src/services/` | 环境探测、git 检查/拉取、作业状态机、把执行器拉起来、回滚前置校验 |
-| `farm-release.mjs` | `tools/` | 真正干活的执行器。`update` / `rollback` / `snapshot` 三个命令 |
+| `farm-release.mjs` | `tools/` → `core/runtime/runner/` | 真正干活的执行器。`update` / `rollback` / `snapshot` 三个命令 |
 
 执行器必须是独立 `.mjs`，不能编进 `core/dist`：更新时 `core/dist` 正在被整个覆盖；回滚时源码还会 `git reset` 回旧提交。它不能依赖任何正在被替换的东西。
+
+**而且它不能住在会被 `git reset` 改动的地方。** 回滚到「这个功能还不存在」的版本时，`git reset` 会把 `tools/farm-release.mjs` 从磁盘删掉——执行器在半路上把自己删了，剩下的重启步骤就没人做。实测踩过一次：`git reset` 之后下一次调用直接 `Cannot find module ...tools/farm-release.mjs`。
+
+所以：
+
+1. 后端拉起前先把它和 `release-layout.js` 复制到 `core/runtime/runner/`（`.gitignore` 里，git 不碰）；
+2. 真正被 spawn 的是副本，副本里两个文件并排放着，连工作树都不再依赖；
+3. 手动在 `tools/` 下直接跑它时，会先自举到副本再从副本重跑一次，然后才干活。
+
+副作用是好事：万一面板自己坏了，`node core/runtime/runner/farm-release.mjs rollback --release <id>` 仍然能把服务救回来。
 
 ## 3. 目录布局
 
@@ -38,6 +48,7 @@
   update-job.json        # 作业状态（面板轮询读它）
   update-job.log         # 执行器完整日志
   update.lock            # 发布互斥（当前未使用，保留给外部脚本）
+  runner/                # 执行器稳定副本（farm-release.mjs + release-layout.js）
 ```
 
 - 目录名 = `<kind>-<UTC 时间戳>-<短提交>`。**同一次构建的后端与前端共用同一个时间戳**，配对就靠这个后缀；跨秒拍摄的历史归档按提交号兜底配对。
@@ -66,6 +77,8 @@
 
 不重新构建，几十秒完成。注意 `version.json` 会跟着 `git reset` 一起退回——**版本号会短暂回退，下次更新会重新升上去**，这是刻意的：让源码树保持干净比让版本号单调更重要。
 
+执行器不受第 2 步影响：它跑在 `core/runtime/runner/` 的副本里，`git reset` 之后照常把第 4 步做完。
+
 前置拒绝条件（任何一条都会明确报错而不是硬来）：
 
 - 工作区有未提交改动 → `DIRTY_WORKTREE`
@@ -81,8 +94,13 @@
 
 所以执行器的顺序是：
 
-1. `app_dev.pid` 记的就是当前后端 → 跑 `bash stop.sh`（它按进程组整组结束，30 秒不退就 `SIGKILL`）
-2. 没有 pid 文件（手动 `node client.js` 起的）→ 直接结束，POSIX 上再补一刀 `-pid` 进程组
+1. `app_dev.pid` 里有一个活着的进程 → 跑 `bash stop.sh`（它按进程组整组结束，30 秒不退就 `SIGKILL`）
+2. pid 文件不存在（手动 `node client.js` 起的）→ 直接结束，POSIX 上再补一刀 `-pid` 进程组
+
+两个 Windows 特有的坑，都已经写进代码：
+
+- **pid 命名空间**：`start.sh` 用 `nohup setsid node … &` 启动，写进 `app_dev.pid` 的是 MSYS pid。`process.kill(msysPid, 0)` 抛 `ESRCH`，而 `bash -c 'kill -0 msysPid'` 是通的。所以存活判定要两个命名空间都问一遍，否则活得好好的服务会被判成「没起来」。
+- **启动成功 ≠ pid 活着**：进程起来了但端口还没监听、宿主正在退出，pid 一样是活的。真正的判据是 `/api/game-version` 能答话（不需要鉴权，返回里带 `botVersion`；字段在顶层，不在 `data` 里）。探测不到就按失败处理并触发自动回滚。
 
 ## 7. 面板怎么知道「更新完成了」
 
@@ -127,6 +145,7 @@
 | 更新成功但界面没变 | 面板应提示「面板已更新，点此刷新」；强制 `Ctrl+F5` |
 | 回滚报「有未推送的本地提交」 | `git log @{u}..HEAD`，推上去或 `git reset --hard @{u}` 再来 |
 | 归档占用太大 | 面板里删单个版本，或调小 `FARM_RELEASES_KEEP`，或点「清理孤儿」 |
+| 回滚到很老的版本后，服务停了没起来 | 用稳定副本手动拉起：`node core/runtime/runner/farm-release.mjs rollback --release <id>` |
 
 手工排查命令：
 
@@ -139,4 +158,7 @@ cat core/runtime/update-job.json
 
 # 强制给当前版本拍一张快照（不重启、不更新）
 node tools/farm-release.mjs snapshot
+
+# 执行器稳定副本（git reset 删不掉，面板坏了也能用它救回来）
+node core/runtime/runner/farm-release.mjs snapshot
 ```
