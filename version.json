@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 8,
-  "build": 238,
-  "version": "3.35.8",
-  "updatedAt": "2026-11-24T02:42:48.946Z",
+  "patch": 9,
+  "build": 239,
+  "version": "3.35.9",
+  "updatedAt": "2026-11-24T04:58:07.964Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.9",
+      "build": 239,
+      "date": "2026-11-24",
+      "summary": "面板一键在线更新与版本回滚",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.8",
       "build": 238,

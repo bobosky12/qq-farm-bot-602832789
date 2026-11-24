@@ -5,7 +5,7 @@ const test = require('node:test');
 const { encodeFrame, createFrameDecoder, MAX_FRAME_BYTES } = require('../dist/host/frame');
 
 test('单帧编解码：元数据与二进制 body 都能还原', () => {
-    const body = Buffer.from([0x01, 0x02, 0x03, 0xff]);
+    const body = Buffer.from([0x01, 0x02, 0x03, 0xFF]);
     const frameBytes = encodeFrame({ t: 'req', seq: 7, service: 'gamepb.userpb.UserService' }, body);
     const received = [];
     const decode = createFrameDecoder(frame => received.push(frame));
@@ -31,7 +31,7 @@ test('无 body 的帧 body 为 undefined，且能连续解码多帧（粘包）'
 });
 
 test('按字节逐段投递（TCP 分片）仍能正确切帧', () => {
-    const body = Buffer.alloc(64, 0xab);
+    const body = Buffer.alloc(64, 0xAB);
     const frameBytes = encodeFrame({ t: 'msg', seq: 42 }, body);
     const received = [];
     const decode = createFrameDecoder(frame => received.push(frame));

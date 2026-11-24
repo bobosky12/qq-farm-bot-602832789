@@ -54,10 +54,11 @@ function parsePoolLine(line: string): any {
     const paramRe = /(?:^|[?&\s"'<|])(uid|openid|share_source|doc_id|share_key)=([^&\s"'<|]+)/g;
     const params: Record<string, string> = {};
     let firstIndex = -1;
-    let match: RegExpExecArray | null;
-    while ((match = paramRe.exec(text)) !== null) {
+    let match: RegExpExecArray | null = paramRe.exec(text);
+    while (match) {
         if (!(match[1] in params)) params[match[1]] = match[2];
         if (firstIndex < 0) firstIndex = match.index;
+        match = paramRe.exec(text);
     }
     if (firstIndex < 0) return null;
     const cardTime = firstIndex > 0 ? text.slice(0, firstIndex).replace(/[|?&\s]+$/, '').trim() : '';

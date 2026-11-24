@@ -146,6 +146,11 @@ const INPUT_SURFACE = [
 
     // 登录任务：taskId 是内存表的键，不是数值。
     ['qq-login-routes.ts', 'taskId', 'params', 'text', 'route'],
+
+    // 在线更新：pullFirst 是布尔开关；tail 是日志条数，走 readCountOr 收敛到 1~300。
+    ['system-update-routes.ts', 'pullFirst', 'body', 'bool', 'route'],
+    ['system-update-routes.ts', 'tail', 'query', 'int', 'route'],
+
     ['wx-login-routes.ts', 'app_id', 'body', 'text', 'route'],
     ['wx-login-routes.ts', 'taskId', 'params', 'text', 'route'],
 

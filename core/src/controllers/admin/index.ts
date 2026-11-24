@@ -22,6 +22,8 @@ const { mountActivityCenterRoutes } = require('./activity-center-routes');
 const { mountCommerceRoutes } = require('./commerce-routes');
 const { mountCareerRoutes } = require('./career-routes');
 const { mountPanelNotificationRoutes } = require('./panel-notification-routes');
+const { mountSystemUpdateRoutes } = require('./system-update-routes');
+const { createSystemUpdateService } = require('../../services/system-update');
 const { mountWxLoginRoutes } = require('./wx-login-routes');
 const { mountQqLoginRoutes } = require('./qq-login-routes');
 const {
@@ -74,10 +76,27 @@ function guardAsyncRoutes(app: any): void {
     }
 }
 
+/**
+ * 在线更新服务初始化。
+ *
+ * 单文件打包、非 git 部署、权限受限的目录都会让初始化失败——这些是**预期内**的运行形态，
+ * 不是错误。所以这里吞掉异常并返回 null，由路由层回一个「不支持在线更新」的状态，
+ * 面板照常显示其它内容，不能因为一个可选功能把整个管理端拖下水。
+ */
+function createSystemUpdateSafely(): any {
+    try {
+        return createSystemUpdateService();
+    }
+    catch (err: any) {
+        adminLogger.warn('system update service unavailable', { error: err?.message || String(err) });
+        return null;
+    }
+}
+
 function startAdminServer(dataProvider: any): void {
     if (ctx) return;
 
-    ctx = createAdminContext(dataProvider);
+    ctx = createAdminContext(dataProvider, { systemUpdate: createSystemUpdateSafely() });
 
     const app = express();
     guardAsyncRoutes(app);
@@ -107,7 +126,15 @@ function startAdminServer(dataProvider: any): void {
 
     const webDist = path.join(__dirname, '../../../../web/dist');
     if (fs.existsSync(webDist)) {
-        app.use(express.static(webDist));
+        // 带 hash 的静态资源可以长缓存，入口 HTML 必须每次回源：在线更新之后浏览器要能
+        // 立刻拿到引用新 bundle 的 index.html，否则会一直跑着刷新前的旧代码。
+        app.use(express.static(webDist, {
+            setHeaders: (res: any, filePath: string) => {
+                if (filePath.endsWith('.html')) {
+                    res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                }
+            },
+        }));
     } else {
         adminLogger.warn('web build not found', { webDist });
         app.get('/', (_req: any, res: any) => res.send('web build not found. Please build the web project.'));
@@ -125,6 +152,7 @@ function startAdminServer(dataProvider: any): void {
     mountCommerceRoutes(app, ctx);
     mountCareerRoutes(app, ctx);
     mountPanelNotificationRoutes(app, ctx);
+    mountSystemUpdateRoutes(app, ctx);
 
     // SPA fallback
     app.get('*', (req: any, res: any) => {

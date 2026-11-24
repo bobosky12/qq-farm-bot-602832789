@@ -252,7 +252,6 @@ function updateProfile(uid: string, extra: { name?: string; level?: number; dogB
  * bound=false 表示请求发出去了但服务端没绑定（openid 与 share_key 不匹配 / 对方好友位满）。
  */
 function markArkApplied(accountId: string, uid: string, bound: boolean): void {
-    const pool = load();
     const key = String(uid);
     const applies = appliesFor(accountId);
     const state = applies[key] || { status: 'new', applyCount: 0, lastApplyAt: null, deadAt: null, deadReason: '', updatedAt: 0 };

@@ -107,7 +107,9 @@ const stockTiles = computed(() => {
    位置与农场首页右侧那两栏一致：先倒计时、再今日统计，
    倒计时三环（任务 / 分享 / 福利）来自牧场的每日例程。 */
 const now = ref(Date.now())
-const ticker = window.setInterval(() => { now.value = Date.now() }, 1000)
+const ticker = window.setInterval(() => {
+  now.value = Date.now()
+}, 1000)
 onBeforeUnmount(() => window.clearInterval(ticker))
 
 // 与桌面副本一致：牧场 / 帮助 / 偷取
@@ -135,10 +137,10 @@ const checks = computed(() => RANCH_CHECKS.map((item) => {
   const value = !queue
     ? '读取中'
     : !queue.enabled
-      ? '未开启'
-      : queue.done && !queue.nextAt
-        ? '已完成'
-        : remain > 0 ? formatCountdown(remain) : '检查中…'
+        ? '未开启'
+        : queue.done && !queue.nextAt
+          ? '已完成'
+          : remain > 0 ? formatCountdown(remain) : '检查中…'
   // 进度环：没有下一次检查时间就按「本轮已完成」画满。
   const progress = queue && queue.enabled ? (queue.nextAt ? Math.min(100, Math.max(0, 100 - remain / Math.max(1, Math.round((Number(queue.nextAt) - Number(queue.lastAt || 0)) / 1000)) * 100)) : 100) : 0
   return { ...item, value, progress: ready ? 100 : progress }
@@ -196,7 +198,7 @@ const fixedActionTiles = computed(() => RANCH_TODAY_ACTIONS.map(({ key, label })
 })))
 
 const otherActionTiles = computed(() => operationEntries.value
-  .filter(([key]) => !(RANCH_TODAY_ACTIONS as readonly string[]).some(item => item.key === key))
+  .filter(([key]) => !RANCH_TODAY_ACTIONS.some(item => item.key === key))
   .map(([key, val]) => ({
     key: `action-${key}`,
     label: ranchActionLabels[key] || key,
@@ -224,8 +226,14 @@ const expTile = computed(() => ({
  * 表里没列到的动作（otherActionTiles）自动排在末尾，保持原有相对顺序。
  */
 const TODAY_TILE_ORDER = [
-  'currency-1007', 'today-exp', 'currency-7002', 'currency-1008',
-  'action-sell', 'action-steal', 'action-clean', 'action-putMosquito',
+  'currency-1007',
+  'today-exp',
+  'currency-7002',
+  'currency-1008',
+  'action-sell',
+  'action-steal',
+  'action-clean',
+  'action-putMosquito',
 ]
 
 const todayTiles = computed(() => {
@@ -245,75 +253,75 @@ const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.val
     <EmptyState v-if="!currentAccountId" title="请先选择账号" description="在左侧选择账号后查看牧场" icon="i-carbon-user-avatar" />
     <RanchGate v-else @retry="refresh">
       <div class="overview-band">
-      <div class="overview-grid">
-        <!-- 账号：身份、在线状态与牧场等级 -->
-        <section class="ov-card ov-account">
-          <div class="ov-account__head">
-            <div class="ov-avatar" :class="{ 'is-online': isOnline }">
-              <img v-if="avatar && avatar !== failedAvatar" :key="avatar" :src="avatar" alt="" @error="failedAvatar = avatar">
-              <span v-else class="i-carbon-user-avatar" />
-              <i class="ov-avatar__dot" />
-            </div>
-            <div class="min-w-0 flex-1">
-              <div class="ov-account__name-row">
-                <strong class="ov-account__name" :title="displayName">{{ displayName }}</strong>
-                <span class="ov-level">牧场 Lv.{{ state.level }}</span>
+        <div class="overview-grid">
+          <!-- 账号：身份、在线状态与牧场等级 -->
+          <section class="ov-card ov-account">
+            <div class="ov-account__head">
+              <div class="ov-avatar" :class="{ 'is-online': isOnline }">
+                <img v-if="avatar && avatar !== failedAvatar" :key="avatar" :src="avatar" alt="" @error="failedAvatar = avatar">
+                <span v-else class="i-carbon-user-avatar" />
+                <i class="ov-avatar__dot" />
               </div>
-              <div class="ov-presence">
-                <span class="ov-presence__state" :class="isOnline ? 'is-online' : 'is-offline'">{{ isOnline ? '在线' : '离线' }}</span>
-                <span class="ov-presence__item"><span class="i-carbon-pet-image-o" />饲养 {{ animals.length }} / {{ capacity }}</span>
-                <span v-if="platformLabel" class="ov-presence__item">{{ platformLabel }}</span>
+              <div class="min-w-0 flex-1">
+                <div class="ov-account__name-row">
+                  <strong class="ov-account__name" :title="displayName">{{ displayName }}</strong>
+                  <span class="ov-level">牧场 Lv.{{ state.level }}</span>
+                </div>
+                <div class="ov-presence">
+                  <span class="ov-presence__state" :class="isOnline ? 'is-online' : 'is-offline'">{{ isOnline ? '在线' : '离线' }}</span>
+                  <span class="ov-presence__item"><span class="i-carbon-pet-image-o" />饲养 {{ animals.length }} / {{ capacity }}</span>
+                  <span v-if="platformLabel" class="ov-presence__item">{{ platformLabel }}</span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="ov-exp">
-            <div class="ov-exp__labels">
-              <span>牧场经验</span>
-              <span class="ov-exp__value">
-                {{ formatCount(state.currentExp) }} / {{ state.neededExp ? formatCount(state.neededExp) : '—' }}
-                <b>{{ Math.floor(expPercent) }}%</b>
-              </span>
+            <div class="ov-exp">
+              <div class="ov-exp__labels">
+                <span>牧场经验</span>
+                <span class="ov-exp__value">
+                  {{ formatCount(state.currentExp) }} / {{ state.neededExp ? formatCount(state.neededExp) : '—' }}
+                  <b>{{ Math.floor(expPercent) }}%</b>
+                </span>
+              </div>
+              <div class="ov-exp__track">
+                <div class="ov-exp__bar" :style="{ width: `${expPercent}%` }" />
+              </div>
             </div>
-            <div class="ov-exp__track">
-              <div class="ov-exp__bar" :style="{ width: `${expPercent}%` }" />
+
+            <div class="ov-account__foot">
+              <span>{{ expHint }}</span>
             </div>
-          </div>
+          </section>
 
-          <div class="ov-account__foot">
-            <span>{{ expHint }}</span>
-          </div>
-        </section>
-
-        <!-- 资产 -->
-        <section class="ov-card">
-          <h3 class="ov-card__title">
-            资产
-          </h3>
-          <div class="ov-tiles">
-            <div v-for="item in assetTiles" :key="item.id" class="ov-tile">
-              <span class="ov-tile__label"><img class="ov-tile__img" :src="item.image" alt="">{{ item.name }}</span>
-              <strong class="ov-tile__value" :title="item.display">{{ item.display }}</strong>
+          <!-- 资产 -->
+          <section class="ov-card">
+            <h3 class="ov-card__title">
+              资产
+            </h3>
+            <div class="ov-tiles">
+              <div v-for="item in assetTiles" :key="item.id" class="ov-tile">
+                <span class="ov-tile__label"><img class="ov-tile__img" :src="item.image" alt="">{{ item.name }}</span>
+                <strong class="ov-tile__value" :title="item.display">{{ item.display }}</strong>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- 库存：普通/有机罐头时长与普通/巨大图鉴等级（桌面副本同款四项） -->
-        <section class="ov-card">
-          <h3 class="ov-card__title">
-            库存
-          </h3>
-          <div class="ov-tiles">
-            <div v-for="item in stockTiles" :key="item.key" class="ov-tile">
-              <span class="ov-tile__label"><img class="ov-tile__img" :src="item.image" alt="">{{ item.label }}</span>
-              <strong class="ov-tile__value">{{ item.value }}</strong>
+          <!-- 库存：普通/有机罐头时长与普通/巨大图鉴等级（桌面副本同款四项） -->
+          <section class="ov-card">
+            <h3 class="ov-card__title">
+              库存
+            </h3>
+            <div class="ov-tiles">
+              <div v-for="item in stockTiles" :key="item.key" class="ov-tile">
+                <span class="ov-tile__label"><img class="ov-tile__img" :src="item.image" alt="">{{ item.label }}</span>
+                <strong class="ov-tile__value">{{ item.value }}</strong>
+              </div>
             </div>
-          </div>
-        </section>
-      </div>
+          </section>
+        </div>
 
-      <!-- 牧场生涯（上游 PR #175）：收获 / 成熟 / 偷取与产物一览 -->
-      <RanchCareerPanel v-if="state.career" :key="currentAccountId" :career="state.career" />
+        <!-- 牧场生涯（上游 PR #175）：收获 / 成熟 / 偷取与产物一览 -->
+        <RanchCareerPanel v-if="state.career" :key="currentAccountId" :career="state.career" />
       </div>
 
       <div v-if="blocked" class="ranch-alert" role="status">
@@ -349,7 +357,7 @@ const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.val
                     <span class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ check.label }}</span>
                   </div>
                 </div>
-                <div class="mt-1.5 w-full truncate text-sm font-bold font-mono 2xl:text-base" :title="check.value">
+                <div class="mt-1.5 w-full truncate text-sm font-mono font-bold 2xl:text-base" :title="check.value">
                   {{ check.value }}
                 </div>
               </div>

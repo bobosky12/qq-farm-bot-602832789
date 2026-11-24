@@ -101,14 +101,18 @@ function inScene(run: (cells: any) => Promise<any>): Promise<any> {
                         logWarn('牧场', `恢复场景 ${previous} 失败（连接已静默 ${Math.round(silenceMs / 1000)} 秒）：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
                     } else {
                         logWarn('牧场', `恢复场景 ${previous} 首次失败，1.5 秒后重试：${firstError.message}`, { module: 'ranch', event: 'ranch_scene_restore_retry' });
-                        try {
-                            await new Promise(resolve => setTimeout(resolve, 1500));
-                            if (network.getWs() !== socket) throw firstError;
-                            await restore();
-                            restoreError = null;
-                        } catch (retryError: any) {
-                            restoreError = retryError;
-                            logWarn('牧场', `恢复场景 ${previous} 重试仍失败：${retryError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
+                        await new Promise(resolve => setTimeout(resolve, 1500));
+                        // 等这 1.5 秒期间连接可能已经被换掉，此时重试毫无意义，直接沿用首次失败。
+                        if (network.getWs() !== socket) {
+                            restoreError = firstError;
+                        } else {
+                            try {
+                                await restore();
+                                restoreError = null;
+                            } catch (retryError: any) {
+                                restoreError = retryError;
+                                logWarn('牧场', `恢复场景 ${previous} 重试仍失败：${retryError.message}`, { module: 'ranch', event: 'ranch_scene_restore' });
+                            }
                         }
                     }
                 }

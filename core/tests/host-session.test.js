@@ -55,7 +55,7 @@ test('worker 不在时推送进缓存，attach 后按序补发并标记 replay',
 test('缓存超量时丢最旧的，并给 worker 一个缺口提示', () => {
     const server = makeServer();
     for (let i = 0; i < 700; i += 1) {
-        server.onGatewayMessage(notifyFrame('svc', 'Notify', Buffer.alloc(8, i & 0xff)));
+        server.onGatewayMessage(notifyFrame('svc', 'Notify', Buffer.alloc(8, i & 0xFF)));
     }
     assert.ok(server.notifyBuffer.length <= 512, '缓存条数必须有上限');
     assert.ok(server.droppedNotifies > 0, '丢弃必须记账');

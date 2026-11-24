@@ -34,7 +34,6 @@ const logContainer = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 const lastBagFetchAt = ref(0)
 const clearingLogs = ref(false)
-const refreshingLogs = ref(false)
 const pendingLogCount = ref(0)
 
 const allLogs = computed<RuntimeLogEntry[]>(() => {
@@ -70,15 +69,6 @@ const visibleLogs = computed(() => compactRuntimeLogs(filteredLogs.value))
 
 /** 日志行展示：先按模块/事件/关键词过滤并合并重复，再按级别筛一层。 */
 const displayLogs = computed(() => visibleLogs.value.filter(log => !filter.level || log.level === filter.level))
-
-const logSummary = computed(() => {
-  const counts = { info: 0, warn: 0, error: 0 }
-  if (currentAccountId.value) {
-    for (const log of filteredLogs.value)
-      counts[log.level]++
-  }
-  return counts
-})
 
 const modules = [
   { label: '所有模块', value: '' },
@@ -439,36 +429,6 @@ function formatLogTimeRange(log: RuntimeLogEntry) {
   return `${start}–${new Date(log.lastTs).toLocaleTimeString('zh-CN', { hour12: false })}`
 }
 
-function getLogTagClass(tag: string) {
-  if (tag === '错误')
-    return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-  if (tag === '系统')
-    return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300'
-  if (tag === '活动')
-    return 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
-  if (tag === '宠物')
-    return 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300'
-  if (tag === '牧场')
-    return 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300'
-  if (tag === '警告')
-    return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300'
-  return 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
-}
-
-function getLogRowClass(log: RuntimeLogEntry) {
-  if (log.level === 'error')
-    return 'border-red-200 bg-red-50/70 dark:border-red-900/60 dark:bg-red-950/20'
-  if (log.level === 'warn')
-    return 'border-amber-200 bg-amber-50/60 dark:border-amber-900/60 dark:bg-amber-950/20'
-  return 'border-transparent hover:bg-white/55 dark:hover:bg-gray-800/45'
-}
-
-function getLogMsgClass(tag: string) {
-  if (tag === '错误')
-    return 'text-red-600 dark:text-red-400'
-  return 'text-gray-700 dark:text-gray-300'
-}
-
 // 动作统计元信息按老版本全量恢复（今日统计面板）。
 const OP_META: Record<string, { label: string, icon: string, color: string }> = {
   harvest: { label: '收获', icon: 'i-carbon-crop-growth', color: 'text-green-500' },
@@ -630,19 +590,6 @@ function onLogFilterChange() {
 function onLogSearchTrigger() {
   pendingLogCount.value = 0
   refresh(true)
-}
-
-async function refreshRuntimeLogs() {
-  if (!currentAccountId.value || refreshingLogs.value)
-    return
-  refreshingLogs.value = true
-  try {
-    await statusStore.fetchLogs(currentAccountId.value, { limit: 300 })
-    toastStore.success('日志已刷新')
-  }
-  finally {
-    refreshingLogs.value = false
-  }
 }
 
 watch(currentAccountId, async () => {
@@ -1006,7 +953,7 @@ useIntervalFn(updateCountdowns, 1000)
                   <span class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">{{ check.label }}</span>
                 </div>
               </div>
-              <div class="mt-1.5 w-full truncate text-sm font-bold font-mono 2xl:text-base" :title="checksReady ? check.time : syncLabel">
+              <div class="mt-1.5 w-full truncate text-sm font-mono font-bold 2xl:text-base" :title="checksReady ? check.time : syncLabel">
                 {{ checksReady ? check.time : '—' }}
               </div>
             </div>

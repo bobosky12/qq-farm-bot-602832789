@@ -7,6 +7,7 @@ import api, { getApiErrorMessage } from '@/api'
 import AccountFeatureSettings from '@/components/settings/AccountFeatureSettings.vue'
 import AccountManagementPanel from '@/components/settings/AccountManagementPanel.vue'
 import FriendApplyTab from '@/components/settings/FriendApplyTab.vue'
+import VersionUpdatePanel from '@/components/settings/VersionUpdatePanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -31,8 +32,8 @@ const accountStore = useAccountStore()
 const userStore = useUserStore()
 const settingStore = useSettingStore()
 
-type SettingsTab = 'account' | 'friend-apply' | 'farm-config' | 'ranch-config' | 'activity-config' | 'notification' | 'system-settings' | 'system'
-const settingsTabKeys: SettingsTab[] = ['account', 'friend-apply', 'farm-config', 'ranch-config', 'activity-config', 'notification', 'system-settings', 'system']
+type SettingsTab = 'account' | 'friend-apply' | 'farm-config' | 'ranch-config' | 'activity-config' | 'notification' | 'system-settings' | 'system' | 'system-update'
+const settingsTabKeys: SettingsTab[] = ['account', 'friend-apply', 'farm-config', 'ranch-config', 'activity-config', 'notification', 'system-settings', 'system', 'system-update']
 // 旧标签仍可能出现在收藏夹或外部链接里，统一折到新分类上。
 const LEGACY_TAB_ALIAS: Record<string, SettingsTab> = {
   'strategy': 'farm-config',
@@ -79,6 +80,7 @@ const tabs = [
   { key: 'notification', label: '通知设置', icon: 'i-carbon-notification' },
   { key: 'system-settings', label: '全局设置', icon: 'i-carbon-settings' },
   { key: 'system', label: '连接与设备', icon: 'i-carbon-settings-services' },
+  { key: 'system-update', label: '版本与更新', icon: 'i-carbon-cloud-download' },
 ] as const
 
 async function scrollActiveTabIntoView() {
@@ -927,9 +929,9 @@ async function handleResetSystemConfig() {
 
           <AccountFeatureSettings
             v-else
-            group="farm"
             v-model:strategy="localStrategySettings"
             v-model:automation="localAutomationSettings"
+            group="farm"
             :current-account-name="currentAccountName"
             :current-account-id="currentAccountId"
             :loading="settingsLoading"
@@ -956,9 +958,9 @@ async function handleResetSystemConfig() {
 
           <AccountFeatureSettings
             v-else
-            group="ranch"
             v-model:strategy="localStrategySettings"
             v-model:automation="localAutomationSettings"
+            group="ranch"
             :current-account-name="currentAccountName"
             :current-account-id="currentAccountId"
             :loading="settingsLoading"
@@ -985,9 +987,9 @@ async function handleResetSystemConfig() {
 
           <AccountFeatureSettings
             v-else
-            group="events"
             v-model:strategy="localStrategySettings"
             v-model:automation="localAutomationSettings"
+            group="events"
             :current-account-name="currentAccountName"
             :current-account-id="currentAccountId"
             :loading="settingsLoading"
@@ -1380,6 +1382,9 @@ async function handleResetSystemConfig() {
             </div>
           </section>
         </div>
+
+        <!-- 版本与更新：在线更新 + 历史版本回滚 -->
+        <VersionUpdatePanel v-else-if="activeTab === 'system-update'" />
       </div>
     </div>
 

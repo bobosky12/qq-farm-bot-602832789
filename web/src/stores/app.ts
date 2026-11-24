@@ -23,7 +23,6 @@ export const useAppStore = defineStore('app', () => {
     themeMode.value = mode
   }
 
-
   function toggleSidebar() {
     sidebarOpen.value = !sidebarOpen.value
   }

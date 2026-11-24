@@ -63,3 +63,8 @@ __pycache__/
 
 # 构建备份目录（vite build 前 mv dist 产生）
 web/dist.old.*/
+
+# 在线更新的产物归档与运行态（作业状态、日志、互斥锁）
+# 必须忽略：这两个目录一旦被 git 看见，更新前的「工作区必须干净」检查就永远过不了。
+releases/
+core/runtime/

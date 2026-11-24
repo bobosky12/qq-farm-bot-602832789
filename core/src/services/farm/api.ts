@@ -10,6 +10,9 @@ const { toLong, toNum, sleep, randomDelay, log, logWarn, toTimeSec } = require('
 const { PlantPhase } = require('../../config/config');
 const { getCurrentPhase } = require('./land-analysis');
 
+/** 化肥容器不足：施肥请求被网关拒绝，需要先补货。提前声明，供下方补货分支使用。 */
+const FERTILIZER_CONTAINER_EMPTY_CODE = 1000019;
+
 // 操作限制更新回调 (由 friend.js 设置)
 let onOperationLimitsUpdate: ((limits: any) => void) | null = null;
 function setOperationLimitsCallback(callback: (limits: any) => void): void {
@@ -167,8 +170,6 @@ function isSkippableFertilizeLandError(error: any): boolean {
     return code === 1001024 || code === 1001025;
 }
 
-/** 化肥容器不足：施肥请求被网关拒绝，需要先补货。 */
-const FERTILIZER_CONTAINER_EMPTY_CODE = 1000019;
 const fertilizerRefillInFlight: { normal: Promise<boolean> | null; organic: Promise<boolean> | null } = { normal: null, organic: null };
 
 /**

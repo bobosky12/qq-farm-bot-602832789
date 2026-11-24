@@ -15,15 +15,15 @@ import { useFriendStore } from '@/stores/friend'
 import ActivityDirectoryPage from './activity-center/ActivityDirectoryPage.vue'
 import AutumnActivityPage from './activity-center/AutumnActivityPage.vue'
 import CharityActivityPage from './activity-center/CharityActivityPage.vue'
+import MilkTeaPage from './activity-center/MilkTeaPage.vue'
 import MugePage from './activity-center/MugePage.vue'
 import PetDiaryPage from './activity-center/PetDiaryPage.vue'
 import QingMeiActivityPage from './activity-center/QingMeiActivityPage.vue'
 import QixiActivityPage from './activity-center/QixiActivityPage.vue'
 import StellarActivityPage from './activity-center/StellarActivityPage.vue'
 import WeatherActivityPage from './activity-center/WeatherActivityPage.vue'
-import SolarCalendarPage from './SolarCalendar.vue'
 
-import MilkTeaPage from './activity-center/MilkTeaPage.vue'
+import SolarCalendarPage from './SolarCalendar.vue'
 
 type CenterActivity = ActivityGameplayKey | 'solar'
 

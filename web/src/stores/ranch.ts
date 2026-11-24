@@ -149,5 +149,16 @@ export const useRanchStore = defineStore('ranch', () => {
     return !!(await submit(accountId, action, input, { expected }, options))
   }
 
-  return { state, loading, busy, error, notice, receivedAt, load, reload, quote, execute, submit, reset }
+  /**
+   * 免报价直发（`direct: true`）。
+   *
+   * 动物面板的「一键喂养/一键生产/一键收获/清理」走这条：这些动作的代价是固定的
+   * （罐头按库存扣、产物按成熟度结算），没必要先 quote 再确认。返回完整结果对象
+   * 而不是布尔值——调用方要按 `sceneRestored` / `status` 决定提示什么。
+   */
+  function executeDirect(accountId: string, action: string, input: Record<string, unknown>) {
+    return submit(accountId, action, input, { direct: true }, { quiet: true })
+  }
+
+  return { state, loading, busy, error, notice, receivedAt, load, reload, quote, execute, executeDirect, submit, reset }
 })

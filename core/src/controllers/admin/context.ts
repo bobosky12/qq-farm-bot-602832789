@@ -14,9 +14,11 @@ export interface AdminContext {
     server: Server | null;
     io: SocketIOServer | null;
     provider: any;
+    /** 在线更新与版本回滚服务；初始化失败时为 null，路由层会给出明确原因。 */
+    systemUpdate: any | null;
 }
 
-function createAdminContext(dataProvider: any): AdminContext {
+function createAdminContext(dataProvider: any, options: { systemUpdate?: any } = {}): AdminContext {
     const tokens = new Set<string>();
     return {
         tokens,
@@ -24,6 +26,7 @@ function createAdminContext(dataProvider: any): AdminContext {
         server: null,
         io: null,
         provider: dataProvider,
+        systemUpdate: options.systemUpdate || null,
     };
 }
 

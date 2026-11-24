@@ -413,7 +413,7 @@ class HostServer {
     /** worker 的请求：加密 + token + 信封后发出，回包由 onGatewayMessage 转回 worker。 */
     async forwardRpc(seq: number, service: string, method: string, body?: Buffer): Promise<void> {
         // 业务层自己发的心跳：记一笔，宿主心跳据此让路（避免两条心跳流交叉序号）。
-        if (method === 'Heartbeat' && /UserService$/.test(service)) {
+        if (method === 'Heartbeat' && service.endsWith('UserService')) {
             this.lastWorkerHeartbeatAt = Date.now();
         }
         if (!this.socketReady || !this.socket) {

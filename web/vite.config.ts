@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { visualizer } from 'rollup-plugin-visualizer'
@@ -27,6 +27,33 @@ const hasBuild = Number.isFinite(appBuild) && appBuild > 0
 // 完全读不到版本文件时只显示版本号，避免把更新次数回退成 0。
 const appVersionLabel = hasBuild ? `v${appVersion} · 第 ${appBuild} 次更新` : `v${appVersion}`
 
+// 构建指纹：版本号 + 构建序号 + 构建时刻。在线更新完成后后端会把它广播给浏览器，
+// 前端拿自己 bundle 里烘焙的这份指纹一比，就知道标签页里跑的是不是刷新前的旧代码。
+const builtAt = Date.now()
+const appBuildId = `${appVersion}-${hasBuild ? appBuild : '0'}-${builtAt}`
+
+/**
+ * 把构建信息写到 `dist/version.json`。
+ *
+ * 后端只读这个文件就知道「现在服务器上摆着的前端是哪个版本」，不需要去解析 bundle。
+ * 回滚时旧快照里自带它，所以回滚后前端版本号也会跟着退回去。
+ */
+function buildInfoFilePlugin() {
+  return {
+    name: 'qq-farm-build-info',
+    apply: 'build' as const,
+    writeBundle(options: any, bundle: Record<string, any>) {
+      void bundle
+      const outDir = options?.dir || fileURLToPath(new URL('./dist', import.meta.url))
+      writeFileSync(
+        `${outDir}/version.json`,
+        `${JSON.stringify({ buildId: appBuildId, appVersion, appBuild: hasBuild ? appBuild : 0, builtAt }, null, 2)}\n`,
+        'utf8',
+      )
+    },
+  }
+}
+
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
   const analyzeBuild = mode === 'analyze'
@@ -36,6 +63,7 @@ export default defineConfig(({ mode }) => {
     plugins: [
       UnoCSS() as any,
       vue(),
+      buildInfoFilePlugin() as any,
       ...(compressedBuild
         ? [viteCompression({
             verbose: true,
@@ -100,6 +128,7 @@ export default defineConfig(({ mode }) => {
       __APP_VERSION__: JSON.stringify(appVersion),
       __APP_BUILD__: JSON.stringify(hasBuild ? String(appBuild) : ''),
       __APP_VERSION_LABEL__: JSON.stringify(appVersionLabel),
+      __APP_BUILD_ID__: JSON.stringify(appBuildId),
     },
     resolve: {
       alias: {

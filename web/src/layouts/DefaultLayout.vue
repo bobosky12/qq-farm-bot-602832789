@@ -40,30 +40,31 @@ const currentLabel = computed(() => {
   return ('navLabel' in item && item.navLabel) || item.label
 })
 /** 手机底部导航同样跟着场景换：牧场只出牧场入口，不把农场页面混进来。 */
-const mobileItems = computed(() => { if (sceneStore.scene === 'ranch') {
-  return ranchMenu.filter(item => item.mobileLabel).map(item => ({
-    key: item.name,
-    to: item.path,
-    label: item.mobileLabel || item.label,
-    icon: item.icon,
-    active: isRanchMenuActive(item, route.path),
-  }))
-}
-// 农场底部导航按手机端习惯排序：总览 / 农场 / 发现 / 好友 / 我的。
-const MOBILE_ORDER = ['dashboard', 'personal', 'activity-center', 'friends', 'Settings']
-return visibleMenuRoutes()
-  .filter(item => item.mobileLabel)
-  .sort((a, b) => MOBILE_ORDER.indexOf(a.name) - MOBILE_ORDER.indexOf(b.name))
-  .map(item => ({
-    key: item.name,
-    to: menuLink(item),
-    label: item.mobileLabel || item.label,
-    icon: item.icon,
-    active: isMenuActive(item, route.path),
-  }))
+const mobileItems = computed(() => {
+  if (sceneStore.scene === 'ranch') {
+    return ranchMenu.filter(item => item.mobileLabel).map(item => ({
+      key: item.name,
+      to: item.path,
+      label: item.mobileLabel || item.label,
+      icon: item.icon,
+      active: isRanchMenuActive(item, route.path),
+    }))
+  }
+  // 农场底部导航按手机端习惯排序：总览 / 农场 / 发现 / 好友 / 我的。
+  const MOBILE_ORDER = ['dashboard', 'personal', 'activity-center', 'friends', 'Settings']
+  return visibleMenuRoutes()
+    .filter(item => item.mobileLabel)
+    .sort((a, b) => MOBILE_ORDER.indexOf(a.name) - MOBILE_ORDER.indexOf(b.name))
+    .map(item => ({
+      key: item.name,
+      to: menuLink(item),
+      label: item.mobileLabel || item.label,
+      icon: item.icon,
+      active: isMenuActive(item, route.path),
+    }))
 })
 const moreActive = computed(() => !mobileItems.value.some(item => item.active))
-void moreActive
+void moreActive.value
 
 // 手机顶部：农场/牧场分段切换（与侧栏同一份 sceneStore，切场景即换整套页面）。
 const SCENE_OPTIONS: Array<{ key: 'farm' | 'ranch', label: string, icon: string }> = [
@@ -393,7 +394,9 @@ async function logout() {
     font-size: 11px;
     color: var(--ui-subtle);
     text-decoration: none;
-    transition: background 0.2s ease, color 0.2s ease;
+    transition:
+      background 0.2s ease,
+      color 0.2s ease;
   }
   .farm-mobile-nav a > span:first-child {
     font-size: 22px;

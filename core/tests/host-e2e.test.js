@@ -4,7 +4,6 @@ const test = require('node:test');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const net = require('node:net');
 const { fork } = require('node:child_process');
 const { WebSocketServer } = require('ws');
 

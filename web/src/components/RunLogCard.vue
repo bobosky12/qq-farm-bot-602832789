@@ -15,6 +15,8 @@ const toastStore = useToastStore()
 const { logs: statusLogs, realtimeConnected, realtimeLogsEnabled } = storeToRefs(statusStore)
 const { currentAccountId } = storeToRefs(useAccountStore())
 const logContainer = ref<HTMLElement | null>(null)
+/** 程序化滚动期间忽略 scroll 事件，否则 content-visibility 的估算高度会触发「用户上滑」误判。 */
+let programmaticScroll = false
 const autoScroll = ref(true)
 const clearingLogs = ref(false)
 const filter = reactive({ module: '', event: '', keyword: '', isWarn: '' })
@@ -194,7 +196,8 @@ watch(hasActiveLogFilter, (enabled) => {
 })
 
 function onLogScroll(e: Event) {
-  if (programmaticScroll) return
+  if (programmaticScroll)
+    return
   const el = e.target as HTMLElement
   if (!el)
     return
@@ -226,31 +229,35 @@ async function clearLogs() {
 }
 
 let logScrollFrame: number | undefined
-/** 程序化滚动期间忽略 scroll 事件，否则 content-visibility 的估算高度会触发「用户上滑」误判。 */
-let programmaticScroll = false
 
 function stickToBottom(): void {
   const el = logContainer.value
-  if (!el) return
+  if (!el)
+    return
   programmaticScroll = true
   el.scrollTop = el.scrollHeight
   // 行内容展开后真实高度可能变化，下一帧再钉一次（最多两次，避免无限递归）。
   logScrollFrame = window.requestAnimationFrame(() => {
-    if (logContainer.value) logContainer.value.scrollTop = logContainer.value.scrollHeight
+    if (logContainer.value)
+      logContainer.value.scrollTop = logContainer.value.scrollHeight
     programmaticScroll = false
     logScrollFrame = undefined
   })
 }
 
 function scheduleLogScroll(force = false) {
-  if (logScrollFrame !== undefined) return
+  if (logScrollFrame !== undefined)
+    return
   nextTick(() => {
-    if (!logContainer.value || (!force && !autoScroll.value)) return
+    if (!logContainer.value || (!force && !autoScroll.value))
+      return
     logScrollFrame = window.requestAnimationFrame(stickToBottom)
   })
 }
 
-watch(allLogs, () => { scheduleLogScroll() })
+watch(allLogs, () => {
+  scheduleLogScroll()
+})
 
 function scrollToBottom() {
   scheduleLogScroll(true)
@@ -258,8 +265,10 @@ function scrollToBottom() {
   for (const delay of [120, 320, 700, 1200]) {
     window.setTimeout(() => {
       const el = logContainer.value
-      if (!el || !autoScroll.value || programmaticScroll) return
-      if (el.scrollHeight - el.scrollTop - el.clientHeight > 2) scheduleLogScroll(true)
+      if (!el || !autoScroll.value || programmaticScroll)
+        return
+      if (el.scrollHeight - el.scrollTop - el.clientHeight > 2)
+        scheduleLogScroll(true)
     }, delay)
   }
 }

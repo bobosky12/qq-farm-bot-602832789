@@ -1,5 +1,20 @@
 export {};
 const { Buffer } = require('node:buffer');
+
+/**
+ * 宿主传输的共享状态。
+ *
+ * 提前到文件顶部声明：worker 侧最早在发送 RPC（约 500 行）时就要用它，
+ * 声明留在原处会让「使用早于定义」在静态检查里报警，运行期虽然没事，但读代码的人
+ * 得一直往下翻才能确认它不是 undefined。
+ */
+const hostState: {
+    client: any;
+    adapter: HostSocketAdapter | null;
+    session: any;
+    stateTimer: any;
+    lastStateJson: string;
+} = { client: null, adapter: null, session: null, stateTimer: null, lastStateJson: '' };
 const { performance } = require('node:perf_hooks');
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
@@ -1444,14 +1459,6 @@ function finalizeConnection(context: ConnectionContext, details: DisconnectDetai
 //   - 业务 proto / 调度 / 配置 / 数据 / UI 的变更不再导致掉线。
 // 关闭（默认）时保持原有「worker 内直连」行为，完全不改现有部署。
 
-const hostState: {
-    client: any;
-    adapter: HostSocketAdapter | null;
-    session: any;
-    stateTimer: any;
-    lastStateJson: string;
-} = { client: null, adapter: null, session: null, stateTimer: null, lastStateJson: '' };
-
 function isHostTransportEnabled(): boolean {
     return String(process.env.FARM_SOCKET_HOST || '') === '1'
         && !!String(process.env.FARM_HOST_PIPE || '')
@@ -1692,9 +1699,9 @@ function handleHostFrame(frame: { meta: any; body?: Buffer }): void {
         }
         case 'session-ok':
             log('系统', '宿主已接管会话（心跳 / ACE 由宿主持有）');
-            return;
+            break;
         default:
-            return;
+            break;
     }
 }
 
