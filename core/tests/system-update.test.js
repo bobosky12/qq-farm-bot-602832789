@@ -100,6 +100,40 @@ test('release-layout：快照与恢复是互逆的', () => {
     }
 });
 
+test('release-layout：恢复时整体替换产物并刷新时间戳', () => {
+    const root = makeFakeRepo();
+    try {
+        const snap = layout.snapshotRelease({
+            repoRoot: root,
+            kind: 'web',
+            commit: 'abcdef1234567890',
+            shortCommit: 'abcdef1',
+            commitSubject: '测试提交',
+            version: '1.0.0',
+            build: 1,
+            stamp: '20261124123045',
+        });
+
+        // 上一版残留：替换必须是整体的，新版本没有的文件不能留下。
+        fs.writeFileSync(path.join(root, 'web', 'dist', 'stale.js'), '// 旧文件\n', 'utf8');
+        // Windows 上 `fs.cpSync` 会保留源文件时间（POSIX 上不会），把产物改成很旧的日期模拟。
+        const indexHtml = path.join(root, 'web', 'dist', 'index.html');
+        const old = new Date('2020-01-01T00:00:00Z');
+        fs.utimesSync(indexHtml, old, old);
+
+        layout.restoreRelease({ repoRoot: root, releaseId: snap.releaseId });
+
+        assert.ok(!fs.existsSync(path.join(root, 'web', 'dist', 'stale.js')), '旧文件必须被整体替换掉');
+        assert.ok(
+            fs.statSync(indexHtml).mtimeMs > Date.parse('2021-01-01'),
+            '恢复后时间戳要刷新，否则 start.sh 会判定产物过期并白构建一遍',
+        );
+    }
+    finally {
+        cleanup(root);
+    }
+});
+
 test('release-layout：缺产物时拒绝归档，并给出缺了哪些', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'farm-release-empty-'));
     try {

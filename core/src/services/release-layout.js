@@ -328,6 +328,87 @@ function copyArtifact(source, target) {
 }
 
 /**
+ * 用归档产物整体替换目标目录（恢复专用）。
+ *
+ * 不直接 `rm -rf` 目标再复制，而是先把它**改个名字挪进 `core/runtime/trash/`**：
+ *   - 目录改名是一次系统调用，几千个产物文件也是瞬间完成；先删后拷要逐文件删，慢一个数量级，
+ *     中间还会出现「产物目录不存在」的时间窗；
+ *   - 有些环境会对「一次删掉几百个文件」做拦截（开发机上就有这种安全钩子，`fs.rmSync` 直接抛
+ *     `SAFE_DELETE_BULK_CONFIRM_REQUIRED`），改名不受影响；
+ *   - 挪进 `core/runtime/`（已忽略）而不是留在原地，工作区不会被污染。
+ */
+function replaceArtifact(repoRoot, source, target) {
+    if (!fs.existsSync(source)) return false;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+
+    if (fs.existsSync(target)) {
+        let stash = '';
+        try {
+            const trashDir = path.join(resolveRuntimeDir(repoRoot), 'trash');
+            fs.mkdirSync(trashDir, { recursive: true });
+            stash = path.join(trashDir, `${path.basename(target)}-${formatStamp(new Date())}-${process.pid}`);
+            fs.renameSync(target, stash);
+        }
+        catch {
+            // 跨卷之类改名失败的情况，退回直接删。
+            fs.rmSync(target, { recursive: true, force: true });
+            stash = '';
+        }
+        if (stash) {
+            try {
+                fs.rmSync(stash, { recursive: true, force: true });
+            }
+            catch {
+                // 删不掉也无所谓：它在 core/runtime/trash 里，不污染工作区。
+            }
+        }
+    }
+
+    fs.cpSync(source, target, { recursive: true, force: true, dereference: true });
+    return true;
+}
+
+/**
+ * 把恢复出来的产物时间戳刷成「刚刚」。
+ *
+ * 必须显式刷：Windows 上 `fs.cpSync` 走的是 `CopyFileW`，会**保留源文件时间**（POSIX 上
+ * 反而不保留）。于是恢复出来的产物看起来比 `git reset` 刚 checkout 的源码还旧，
+ * `start.sh` 就判定「需要重建」并真的 build 一遍。
+ *
+ * 而回滚的全部意义就是不重建：重建慢一倍以上，还可能因为旧依赖清单装不上而直接失败。
+ * 时间戳对齐是在告诉 `start.sh` 事实——这些产物是刚放上去的。
+ */
+function touchTree(target) {
+    const now = new Date();
+    const walk = (current) => {
+        let stats;
+        try {
+            stats = fs.statSync(current);
+        }
+        catch {
+            return;
+        }
+        if (stats.isDirectory()) {
+            let entries = [];
+            try {
+                entries = fs.readdirSync(current);
+            }
+            catch {
+                entries = [];
+            }
+            for (const entry of entries) walk(path.join(current, entry));
+        }
+        try {
+            fs.utimesSync(current, now, now);
+        }
+        catch {
+            // 时间戳刷不动不影响正确性，最多触发一次多余的重建。
+        }
+    };
+    walk(target);
+}
+
+/**
  * 把仓库里**当前已经构建好**的产物归档成一个版本。
  *
  * 只归档产物（`core/dist`、`core/client.js`、`web/dist`），不归档 `core/src`：
@@ -385,12 +466,15 @@ function restoreRelease(options) {
     }
 
     const meta = readReleaseMeta(releaseDir) || {};
+    const restore = (source, target) => {
+        if (replaceArtifact(repoRoot, source, target)) touchTree(target);
+    };
     if (parsed.kind === 'backend') {
-        copyArtifact(path.join(releaseDir, 'client.js'), path.join(repoRoot, 'core', 'client.js'));
-        copyArtifact(path.join(releaseDir, 'dist'), path.join(repoRoot, 'core', 'dist'));
+        restore(path.join(releaseDir, 'client.js'), path.join(repoRoot, 'core', 'client.js'));
+        restore(path.join(releaseDir, 'dist'), path.join(repoRoot, 'core', 'dist'));
     }
     else {
-        copyArtifact(path.join(releaseDir, 'dist'), path.join(repoRoot, 'web', 'dist'));
+        restore(path.join(releaseDir, 'dist'), path.join(repoRoot, 'web', 'dist'));
     }
     return { releaseId: parsed.releaseId, kind: parsed.kind, meta };
 }

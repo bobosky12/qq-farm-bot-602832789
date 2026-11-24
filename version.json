@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 35,
-  "patch": 10,
-  "build": 250,
-  "version": "3.35.10",
-  "updatedAt": "2026-11-24T05:20:29.030Z",
+  "patch": 11,
+  "build": 251,
+  "version": "3.35.11",
+  "updatedAt": "2026-11-24T05:51:49.128Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.35.11",
+      "build": 251,
+      "date": "2026-11-24",
+      "summary": "回滚不再重建：整体替换产物并刷新时间戳",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.35.10",
       "build": 250,
