@@ -15,6 +15,7 @@
 
 | 版本 | 更新序号 | 日期 | 更新内容 | 提交 |
 | --- | --- | --- | --- | --- |
+| v3.36.2 | #255 | 2026-11-24 | 同步上游 #185：好友牧场一键帮忙生产 | — |
 | v3.36.1 | #253 | 2026-11-24 | 牧场资产换便便并显示本次增量，农场首页日志卡片定高 | — |
 | v3.36.0 | #252 | 2026-11-24 | 同步上游 #184：新增统一日志组件与二级模块筛选 | — |
 | v3.35.11 | #251 | 2026-11-24 | 回滚不再重建：整体替换产物并刷新时间戳 | — |
@@ -243,6 +244,27 @@ flowchart TB
 ```
 
 ## 详细记录
+
+### 2026-11-24 · v3.36.2（#255） · 同步上游 #185：好友牧场一键帮忙生产
+
+同步基线 `d78a279` → 上游 `fb6c2026`。这中间只有两条真实改动：好友牧场一键帮忙生产、自家作物成熟后提前收。**采纳前者，跳过后者**（本地已用另一套机制实现同一目的，见下）。
+
+**采纳：好友牧场「帮忙生产」**
+
+- 后端把好友互动从「三个动作写死在数组里」改成集合驱动：新增 `FRIEND_INTERACTIONS = {stroke, putMosquito, cleanFriend, produceFriend}`，`prepareAction` 与 `operateCore` 都按这个集合短路到 `friends` 模块，以后加动作只改一处。
+- `interactionPlan` 增加 `route` 字段，清理与生产共用同一条提交流程；生产按动物的 `can_deliver` 统计可帮数量，目标键为 `ranch:produceFriend:<host>`，签名带上「当前就绪动物集合」，就绪名单变了会要求重新确认。
+- `commitInteraction` 的回包校验从「只认清理的 `kind===3`」扩展成两路：生产校验 `kind===1` 且命中该牧场的动物键；只有 `stroke` / `putMosquito` 这类计次动作才校验 `remaining === 上次 - 1`，生产与清理不占次数。
+- 前端好友卡片在 `canMidwife` 为真时多一个「帮忙生产」按钮，走 `requestDirect('produceFriend', { hostGid })`；`DirectRanchAction` 联合类型与后端 `contract.ACTIONS` 同步补上该动作。
+- 冲突处理：本地早先把 `operate` 改名成 `operateCore`（配合宿主架构），并额外记了一行 `recordRanchAction`。两处本地改动都保留，只叠加了上游的集合判断与新提示文案（`好友的 N 只动物已开始生产`）。
+
+**跳过：缩短自家作物成熟后的收获等待（`bcf5668f`）**
+
+- 本地已经有等价机制，而且更贴合现有调度：`services/farm/own-maturity.ts` 把「下一块自家作物什么时候熟」记成秒级墙钟，worker 算 `nextFarmRunAt` 时取 `min(常规间隔, 成熟点)`，还带「成熟点过 90 秒未被新快照刷新就作废」和「每分钟最多补跑 3 次」两道防呆。
+- 上游那版是在 `farm/scheduler.ts` 里新起一套 `landDeadlines` + `farm_push_check` 计时器唤醒。而本地 `scheduler.ts` 之前专门把 `farm_push_check` 这个同名计时器按土地 / 社交两类拆开过——共用一个计时器时，土地推送会先 `clear` 掉同时到达的社交事件推送。直接合并会把这个修复顶回去，变成两套互相 clear 的唤醒。
+- 该提交其余文件都属于这套机制的配套改造：`utils.ts` 把服务器时间改成偏移模型、`land-analysis.ts` 抽出 `isExplicitMaturePhase`、`planting.ts` 与 `api.ts` 改走 `decodeChangedLands`、`network.ts` 给 `landsChanged` 补 `hostGid`。脱离 scheduler 没有独立价值，一并跳过。
+- 遗留：`api.ts` 的 `harvest(landIds, isAll)` 与 `decodeChangedLands` 未采纳。等本地 `own-maturity` 需要「只收成熟地块」时再单独评估，不跟着这次硬塞。
+
+**验证**：core 1039 条、web 347 条测试全绿；`tsc` 与 `vue-tsc` 通过；两侧 eslint 无告警。
 
 ### 2026-11-24 · v3.36.1（#253） · 牧场资产换便便并显示本次增量，农场首页日志卡片定高
 

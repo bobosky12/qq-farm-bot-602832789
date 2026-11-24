@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 1,
-  "build": 253,
-  "version": "3.36.1",
-  "updatedAt": "2026-11-24T09:38:00.588Z",
+  "patch": 2,
+  "build": 255,
+  "version": "3.36.2",
+  "updatedAt": "2026-11-24T10:36:49.142Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.2",
+      "build": 255,
+      "date": "2026-11-24",
+      "summary": "同步上游 #185：好友牧场一键帮忙生产",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.1",
       "build": 253,
