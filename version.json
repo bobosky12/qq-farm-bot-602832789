@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 0,
-  "build": 252,
-  "version": "3.36.0",
-  "updatedAt": "2026-11-24T07:07:16.642Z",
+  "patch": 1,
+  "build": 253,
+  "version": "3.36.1",
+  "updatedAt": "2026-11-24T09:38:00.588Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.1",
+      "build": 253,
+      "date": "2026-11-24",
+      "summary": "牧场资产换便便并显示本次增量，农场首页日志卡片定高",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.0",
       "build": 252,

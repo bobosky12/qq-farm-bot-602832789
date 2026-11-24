@@ -11,7 +11,7 @@ import EmptyState from '@/components/ui/EmptyState.vue'
 import { getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useRanchStore } from '@/stores/ranch'
 import { useStatusStore } from '@/stores/status'
-import { formatCouponAmount, formatGoldAmount, formatGoldBeanAmount } from '@/utils/number-format'
+import { formatCouponAmount, formatGoldAmount } from '@/utils/number-format'
 import { ranchActionIcons, ranchActionLabels, ranchTodayOperations } from '@/utils/ranch-display'
 
 const accountStore = useAccountStore()
@@ -54,20 +54,32 @@ const expHint = computed(() => {
 })
 
 const currency = (id: number) => state.value?.currencies?.find((c: any) => Number(c.id) === id)
-// 金券 / 点券 / 金豆豆 / 松果：单位与农场首页的金额口径保持一致（万、亿自动缩写）。
+// 金券 / 点券 / 松果 / 便便：单位与农场首页的金额口径保持一致（万、亿自动缩写），
+// 便便按纯数量展示，不做万/亿缩写（量级小，缩写反而看不懂）。
 const ASSET_FORMATTERS: Record<number, (value: unknown) => string> = {
   1007: formatGoldAmount,
   1002: formatCouponAmount,
-  1005: formatGoldBeanAmount,
   1008: formatGoldAmount,
+  7002: formatCount,
 }
-const assetTiles = computed(() => [1007, 1002, 1005, 1008]
+const ASSET_IDS = [1007, 1002, 1008, 7002]
+// 本次运行增量：后端 currencyRun = { [id]: { baseline, current, delta } }，
+// 口径与农场首页资产卡的「本次」一致（进程内首次观测起算，重启后重新累计）。
+const runCurrencyMap = computed<Record<string, any>>(() => (state.value?.currencyRun || {}))
+const assetTiles = computed(() => ASSET_IDS
   .map(id => currency(id))
   .filter(Boolean)
-  .map((item: any) => ({
-    ...item,
-    display: (ASSET_FORMATTERS[Number(item.id)] || formatCount)(item.count),
-  })))
+  .map((item: any) => {
+    const run = runCurrencyMap.value[String(item.id)] || {}
+    const delta = Number(run.delta) || 0
+    return {
+      ...item,
+      display: (ASSET_FORMATTERS[Number(item.id)] || formatCount)(item.count),
+      delta,
+      // 负号由数字自带，正数手动补「+」，与农场首页同一个写法。
+      deltaText: `${delta > 0 ? '+' : ''}${formatCount(delta)}`,
+    }
+  }))
 // 图鉴等级走独立请求：ranch store 的 load 会整体替换 state，不能在概览页重复加载。
 const book = ref<any>(null)
 async function loadBook() {
@@ -156,7 +168,7 @@ const todayExpGained = computed(() => Math.max(0, Number(status.value?.sessionEx
 const todayOperations = computed(() => ranchTodayOperations(state.value?.operations, state.value?.operationsDate, todayKey.value))
 const operationEntries = computed(() => Object.entries(todayOperations.value).filter(([, count]) => Number(count) > 0))
 
-/* ── 今日统计瓦片：先资源今日增减（金券/松果/便便），再固定动作计数（偷取/出售/清理/放蚊子），
+/* ── 今日统计瓦片：先资源今日增减（金券/松果/便便），再固定动作计数（偷取/出售/蚊子/清理），
    其余动作有记录才出现。样式与同一网格里的其它瓦片完全一致。 ── */
 const RANCH_TODAY_CURRENCIES = [
   { id: 1007, label: '金券', icon: 'i-carbon-ticket' },
@@ -167,7 +179,7 @@ const RANCH_TODAY_ACTIONS = [
   { key: 'steal', label: '偷取' },
   { key: 'sell', label: '出售' },
   { key: 'clean', label: '清理' },
-  { key: 'putMosquito', label: '放蚊子' },
+  { key: 'putMosquito', label: '蚊子' },
 ] as const
 
 const currencyStatsMap = computed<Record<string, any>>(() => (state.value?.currencyStats || {}))
@@ -218,7 +230,7 @@ const expTile = computed(() => ({
 }))
 
 /**
- * 今日统计瓦片的展示顺序：金券、经验、便便、松果、出售、偷取、清理、放蚊子。
+ * 今日统计瓦片的展示顺序：金券、经验、松果、便便、出售、偷取、蚊子、清理。
  *
  * 单独维护这张表而不是依赖上面的拼接顺序——RANCH_TODAY_CURRENCIES /
  * RANCH_TODAY_ACTIONS 是按业务语义分组写的，排版顺序会来回调整，
@@ -228,12 +240,12 @@ const expTile = computed(() => ({
 const TODAY_TILE_ORDER = [
   'currency-1007',
   'today-exp',
-  'currency-7002',
   'currency-1008',
+  'currency-7002',
   'action-sell',
   'action-steal',
-  'action-clean',
   'action-putMosquito',
+  'action-clean',
 ]
 
 const todayTiles = computed(() => {
@@ -293,7 +305,7 @@ const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.val
             </div>
           </section>
 
-          <!-- 资产 -->
+          <!-- 资产：金券 / 点券 / 松果 / 便便，第三行显示本次运行增量 -->
           <section class="ov-card">
             <h3 class="ov-card__title">
               资产
@@ -302,6 +314,9 @@ const activeTodayCount = computed(() => todayTiles.value.filter(tile => tile.val
               <div v-for="item in assetTiles" :key="item.id" class="ov-tile">
                 <span class="ov-tile__label"><img class="ov-tile__img" :src="item.image" alt="">{{ item.name }}</span>
                 <strong class="ov-tile__value" :title="item.display">{{ item.display }}</strong>
+                <small v-if="item.delta !== 0" class="ov-tile__delta" :class="item.delta > 0 ? 'is-up' : 'is-down'">
+                  本次 {{ item.deltaText }}
+                </small>
               </div>
             </div>
           </section>

@@ -5,7 +5,7 @@ import { computed, onMounted, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import AccountCareerModal from '@/components/AccountCareerModal.vue'
 import LevelForecast from '@/components/LevelForecast.vue'
-import RunLogPanel from '@/components/RunLogPanel.vue'
+import RunLogCard from '@/components/RunLogCard.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import { getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
@@ -653,13 +653,13 @@ useIntervalFn(updateCountdowns, 1000)
 
     <!-- Main Content Flex -->
     <div class="flex flex-1 flex-col items-stretch gap-6 md:flex-row">
-      <!-- Logs (Left Column) -->
-      <div class="flex flex-1 flex-col gap-6 md:w-3/4">
-        <!-- 运行日志：统一日志组件（模块 / 子模块 / 事件 / 级别 / 关键词 + 逐块务农聚合） -->
-        <div class="flex flex-1 flex-col farm-card rounded-2xl bg-white p-5 shadow-md md:overflow-hidden dark:bg-gray-800">
-          <RunLogPanel default-module="farm" :max-logs="200" list-class="max-h-[50vh] min-h-0 flex-1" />
-        </div>
-      </div>
+      <!-- 运行日志：与牧场首页共用同一外壳，桌面端定高铺满、不留白 -->
+      <RunLogCard
+        default-module="farm"
+        :max-logs="200"
+        :level-in-signature="false"
+        list-class="max-h-[50vh] min-h-0 flex-1 md:max-h-none"
+      />
 
       <!-- Right Column Stack -->
       <div class="min-w-0 flex flex-col gap-6 md:w-1/4 md:self-start">

@@ -80,9 +80,18 @@ function recordAction(action: string): void {
 let lastCurrencyFingerprint = '';
 
 /**
- * 记录资源余额（金券 1007 / 松果 1008 / 便便 7002）：
+ * 本次运行（进程内）的余额基线：进程启动后第一次观测即定基线，
+ * 之后只更新最新值。与农场首页资产卡的「本次」同口径 ——
+ * 重启 / 重新登录后从新基线重新累计，不落盘、不跨天归零。
+ */
+const runBaseline: Record<string, number> = {};
+const runCurrent: Record<string, number> = {};
+
+/**
+ * 记录资源余额（金券 1007 / 点券 1002 / 松果 1008 / 便便 7002）：
  * 当天第一次观测作为基线，之后每次快照更新最新值；
- * 概览页的「今日统计」用 current - baseline 展示今日增减。
+ * 概览页的「今日统计」用 current - baseline 展示今日增减，
+ * 资产卡片的「本次」用 runBaseline / runCurrent 这一组。
  */
 function recordCurrencies(balances: Record<string, number>): void {
     const id = accountId();
@@ -91,6 +100,12 @@ function recordCurrencies(balances: Record<string, number>): void {
         .map(([key, value]) => [String(key), Number(value) || 0] as const)
         .filter(([, value]) => Number.isFinite(value));
     if (!entries.length) return;
+    // 本次运行基线必须先于指纹去重落账：否则余额没变的那次快照之后，
+    // 进程内基线可能永远停在上一次的值。
+    for (const [key, value] of entries) {
+        if (runBaseline[key] === undefined) runBaseline[key] = value;
+        runCurrent[key] = value;
+    }
     const fingerprint = entries.map(([key, value]) => `${key}:${value}`).join('|');
     if (fingerprint === lastCurrencyFingerprint) return;
     const data = read(id);
@@ -109,9 +124,22 @@ function recordCurrencies(balances: Record<string, number>): void {
     }
 }
 
+/**
+ * 本次运行的资源增减：{ [id]: { baseline, current, delta } }。
+ * 还没观测过的资源不会出现在结果里，前端据此隐藏「本次」行。
+ */
+function getRunCurrencies(): Record<string, { baseline: number; current: number; delta: number }> {
+    const out: Record<string, { baseline: number; current: number; delta: number }> = {};
+    for (const key of Object.keys(runCurrent)) {
+        const baseline = runBaseline[key] ?? runCurrent[key];
+        out[key] = { baseline, current: runCurrent[key], delta: runCurrent[key] - baseline };
+    }
+    return out;
+}
+
 /** 今日统计快照：{ date, actions, currencies }，当天没有记录时都是空对象。 */
 function getToday(): DailyStats {
     return read(accountId());
 }
 
-module.exports = { recordAction, recordCurrencies, getToday };
+module.exports = { recordAction, recordCurrencies, getRunCurrencies, getToday };

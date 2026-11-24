@@ -6,7 +6,7 @@ import test from 'node:test'
 /**
  * 牧场首页「今日统计」瓦片的展示顺序。
  *
- * 顺序是产品反复调过的结果（金券 / 经验 / 便便 / 松果 / 出售 / 偷取 / 清理 / 放蚊子），
+ * 顺序是产品反复调过的结果（金券 / 经验 / 松果 / 便便 / 出售 / 偷取 / 蚊子 / 清理），
  * 之前靠 todayTiles 的拼接顺序隐式表达，改一处容易连带打乱别处，所以收敛成
  * TODAY_TILE_ORDER 一张表。这里锁住表内容与「确实按表排」这件事。
  */
@@ -19,17 +19,22 @@ function tileOrder() {
   return [...block[1].matchAll(/'([^']+)'/g)].map(match => match[1])
 }
 
-test('今日统计瓦片顺序：金券 → 经验 → 便便 → 松果 → 出售 → 偷取 → 清理 → 放蚊子', () => {
+test('今日统计瓦片顺序：金券 → 经验 → 松果 → 便便 → 出售 → 偷取 → 蚊子 → 清理', () => {
   assert.deepEqual(tileOrder(), [
     'currency-1007',
     'today-exp',
-    'currency-7002',
     'currency-1008',
+    'currency-7002',
     'action-sell',
     'action-steal',
-    'action-clean',
     'action-putMosquito',
+    'action-clean',
   ])
+})
+
+test('蚊子瓦片标签去掉「放」字，与其它动作保持两字口径', () => {
+  assert.match(source, /\{ key: 'putMosquito', label: '蚊子' \}/)
+  assert.ok(!source.includes('\'放蚊子\''), '概览页不应再出现「放蚊子」标签')
 })
 
 test('todayTiles 按顺序表排序，未列出的动作排末尾', () => {

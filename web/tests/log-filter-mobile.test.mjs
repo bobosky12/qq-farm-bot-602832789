@@ -36,9 +36,25 @@ function atRule(source, query) {
 // 日志视图统一到 RunLogPanel（上游 #184）：农场概览与牧场面板共用一套，
 // 各自只通过 default-module 指定默认筛选，避免两处逻辑再次分叉。
 
-test('农场概览：日志区交给 RunLogPanel，默认筛选农场', () => {
-  assert.match(dashboard, /<RunLogPanel default-module="farm"/)
-  assert.match(dashboard, /import RunLogPanel from '@\/components\/RunLogPanel\.vue'/)
+test('农场概览：日志区交给统一日志组件，默认筛选农场', () => {
+  assert.match(dashboard, /<RunLogCard[\s\S]{0,200}default-module="farm"/)
+  assert.match(dashboard, /import RunLogCard from '@\/components\/RunLogCard\.vue'/)
+  // 默认模块由外壳透传给统一日志视图
+  assert.match(card, /:default-module="props\.defaultModule"/)
+})
+
+test('日志外壳：农场与牧场共用同一套桌面端定高，避免下半部分留白', () => {
+  const shell = rule(card, '.dash-logs')
+  assert.match(shell, /position:\s*relative/, '外壳需建立定位上下文')
+  assert.match(shell, /min-height:/, '外壳需有最小高度兜底')
+  const inner = rule(card, '.dash-logs__card')
+  assert.match(inner, /position:\s*absolute/, '卡片绝对定位才不会被内容高度左右')
+  assert.match(inner, /inset:\s*0/, '卡片铺满外壳')
+
+  // 两侧都挂在外壳上：农场传 farm、牧场走默认 ranch
+  assert.match(dashboard, /<RunLogCard/)
+  assert.match(overview, /<RunLogCard \/>/)
+  assert.match(card, /defaultModule: 'ranch'/)
 })
 
 test('农场概览：旧内联日志实现已彻底移除，不留半套逻辑', () => {
@@ -52,7 +68,7 @@ test('农场概览：旧内联日志实现已彻底移除，不留半套逻辑',
 test('牧场面板：RunLogCard 只是 RunLogPanel 的牧场壳', () => {
   assert.match(overview, /<RunLogCard \/>/)
   assert.match(card, /import RunLogPanel from '@\/components\/RunLogPanel\.vue'/)
-  assert.match(card, /default-module="ranch"/)
+  assert.match(card, /defaultModule: 'ranch'/)
   // 壳里不该再有自己的筛选/聚合实现
   assert.ok(!card.includes('computed('), 'RunLogCard 应保持为纯包装')
 })
