@@ -199,6 +199,58 @@ docker compose --profile update rm -sf updater # 不想要了就收掉
 
 也就是说，容器更新的粒度是「自己 fork 的提交」，上游同步是开发机上的合并动作。这也解释了为什么每次同步上游都要跑一遍全量测试再推——推上去的那条提交就是所有容器下一次拉到的内容。
 
+## 8.3 上游自己怎么处理容器更新：不支持，写死在代码里
+
+常见的疑问是「上游不是也有版本更新面板吗，为什么还要多一个 updater」。因为**上游那套只在源码部署下成立**，容器里它自己就把功能关掉了。
+
+判定在上游 `core/src/services/system-update.ts` 的 `detectEnv()`（以 `678e4b1` 为准）：
+
+```js
+const docker = options.isDocker ?? (process.env.FARM_RELEASE_ID === 'docker' || fs.existsSync('/.dockerenv'));
+if (docker) {
+    return {
+        mode: 'docker',
+        gitSupported: false,
+        unsupportedReason: '当前运行在 Docker 容器中，请重建镜像或执行 docker compose up -d --build --no-deps qq-farm-bot 更新。',
+        applySupported: false,
+        applyUnsupportedReason: 'Docker 容器请通过镜像重建更新，不支持容器内自更新。',
+    };
+}
+```
+
+`getStatus()` 在 `!gitSupported` 时把 `canCheck / canPull / canApply` 一次性置 `false`；`checkForUpdates`、`pullUpdates`、`applyUpdate`、`rollbackRelease`、`deleteReleases`、`setBackupEnabled` 六个动作全部返回 `400 UNSUPPORTED_ENVIRONMENT`；`getReleasesDirForEnv()` 在 docker 下返回空串，所以容器里「历史版本」列表也是空的。
+
+不是偷懒，是镜像里确实没有能干活的东西 —— 上游 `core/Dockerfile` 的 runner 阶段：
+
+| 需要 | 容器里有吗 |
+| --- | --- |
+| `.git` | ❌ 构建上下文只 COPY `core` / `web` / `packages`，没有仓库元数据 |
+| `git` 命令 | ❌ 基于 `node:20.19.6-alpine`，没装 |
+| pnpm + 源码 | ❌ 只存在于 builder 阶段；runner 只有 `dist`、`src/gameConfig`、`src/proto`、两个 wasm |
+| `tools/service-control.mjs` | ❌ 没拷进 runner |
+| docker CLI | ❌ 没有 |
+
+所以上游 README 的 Docker 章节直接给的是宿主机命令：
+
+```bash
+docker compose build qq-farm-bot
+docker compose up -d --no-deps qq-farm-bot
+```
+
+**两套能力对照：**
+
+| 维度 | 上游 `678e4b1` | 本项目 |
+| --- | --- | --- |
+| 版本标识 | git commit；`web/dist/version.json` 只有 `buildId / appVersion(日期串) / builtAt` | 根 `version.json`：semver + `build` 序号 + `history[]`，面板显示「v3.36.7 · 第 259 次更新」 |
+| 版本号怎么涨 | 不涨；`web/package.json` 手工改日期串 | git hooks 自动递增 + 改写提交标题 + 维护 CHANGELOG 汇总表 |
+| 源码部署更新 | `update.sh all\|web\|backend` → `service-control.mjs` 蓝绿发布 | `tools/farm-release.mjs`：快照 → 切换 → 回滚（`releases/`） |
+| 容器内检查更新 | ❌ 直接拒绝（要 `git fetch`） | ✅ 读远端 `version.json`，不需要 git |
+| 容器内一键更新 | ❌ 拒绝，让你去宿主机 build | ✅ updater 边车代劳（profile `update`） |
+| 容器内回滚 | ❌ 拒绝 | ❌ 同样不支持（回滚要 `git reset`，容器里没有 git，也没有 `releases/`） |
+| 进程架构 | 应用 + `session-host` 两个容器 + `packages/session-contract` | 单容器 + 自研连接宿主 `core/src/host/` |
+
+一句话概括：上游把容器当成**只能重建的不可变产物**；本项目把容器当成**可以自我更新的壳**，代价是多一个挂 `docker.sock` 的边车，而这个能力由用户显式打开。
+
 ## 9. 排障
 
 | 现象 | 先看哪里 |
