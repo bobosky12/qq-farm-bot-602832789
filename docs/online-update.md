@@ -170,6 +170,7 @@ docker compose --profile update rm -sf updater # 不想要了就收掉
 
 几个实现细节，出问题时能对上：
 
+- **时间一律毫秒**。`update-agent.json` / `update-job.json` 里的 `startedAt`、`heartbeatAt`、`updatedAt`、`finishedAt` 全部是毫秒时间戳。助手是 sh 脚本，BusyBox 的 `date` 没有 `%N`，所以用 `$(( $(date +%s) * 1000 ))` 凑毫秒；后端读取时还有一层 `toEpochMs()` 按量级兜底（小于 `1e12` 当秒折算）。写错单位的表现很好认：状态永远是「未启用」，提示「已经 29896434 分钟没有心跳」——那个数字约等于当前毫秒时间戳除以 60000，是秒被当成毫秒的指纹。
 - **通信只靠数据卷**。`update-request.json`（应用→助手）、`update-job.json` / `update-job.log`（助手→应用）、`update-agent.json`（助手心跳）。文件名两边必须一致，测试逐条比对。
 - **作业活性的判据是心跳，不是 pid**。助手在另一个容器里，它的 pid 在后端命名空间毫无意义（通常是 1，永远「活着」）。心跳 120 秒没更新才判死。
 - **compose project 名从自身容器 label 读**，不猜目录名。猜错会另起一套容器，还会撞 `container_name`。

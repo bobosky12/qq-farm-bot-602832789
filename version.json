@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 8,
-  "build": 260,
-  "version": "3.36.8",
-  "updatedAt": "2026-11-25T04:27:07.983Z",
+  "patch": 9,
+  "build": 261,
+  "version": "3.36.9",
+  "updatedAt": "2026-11-25T04:47:30.039Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.9",
+      "build": 261,
+      "date": "2026-11-25",
+      "summary": "修掉更新助手心跳的时间单位错位",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.8",
       "build": 260,
