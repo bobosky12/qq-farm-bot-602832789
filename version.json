@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 9,
-  "build": 261,
-  "version": "3.36.9",
-  "updatedAt": "2026-11-25T04:47:30.039Z",
+  "patch": 10,
+  "build": 262,
+  "version": "3.36.10",
+  "updatedAt": "2026-11-25T05:22:56.342Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.10",
+      "build": 262,
+      "date": "2026-11-25",
+      "summary": "手机端设置页入口改成等宽三列网格",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.9",
       "build": 261,
