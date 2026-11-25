@@ -1,12 +1,20 @@
 {
   "major": 3,
   "minor": 36,
-  "patch": 6,
-  "build": 258,
-  "version": "3.36.6",
-  "updatedAt": "2026-11-24T16:05:16.790Z",
+  "patch": 7,
+  "build": 259,
+  "version": "3.36.7",
+  "updatedAt": "2026-11-25T03:39:36.891Z",
   "lastCommit": "—",
   "history": [
+    {
+      "version": "3.36.7",
+      "build": 259,
+      "date": "2026-11-25",
+      "summary": "手机端日志区定高内滚，不再把首页撑成一条长条",
+      "commit": "—",
+      "type": "patch"
+    },
     {
       "version": "3.36.6",
       "build": 258,
